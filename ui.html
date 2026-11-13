@@ -22,6 +22,9 @@
   #items img { display: block; max-width: 100%; max-height: 300px; object-fit: contain; margin: 12px 0; }
   #items > li { padding: 12px; margin-bottom: 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
   #items input[type="checkbox"] { display: inline-block; width: auto; margin-left: 8px; }
+  #componentChat, #flowChat { list-style: none; padding: 0; }
+  .message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; padding: 10px 12px; background: white; border-radius: 10px; }
+  .message.user { background: #dcefe5; margin-left: 12%; }
   #status { min-height: 20px; line-height: 1.4; }
   #status.error { color: #a22222; }
 </style>
@@ -67,23 +70,23 @@
 <section id="plan" hidden>
   <h2 id="planTitle">1. Согласуйте набор компонентов</h2>
   <p id="target" class="hint"></p>
+  <ol id="componentChat" role="log"></ol>
   <ol id="items"></ol>
   <div id="listActions">
-  <label>Что изменить в предложении
+  <label>Сообщение для GigaCode
     <textarea id="revision" maxlength="3000" placeholder="Убери телефон. Вместо поля «Тип» поставь список."></textarea>
   </label>
-  <button id="revise" type="button">Обновить предложение</button>
-  <button id="openProperties" type="button">Согласовать набор</button>
+  <button id="revise" type="button">Отправить</button>
+  <button id="openProperties" type="button">Подтвердить набор компонентов</button>
   </div>
-  <button id="requestCopy" type="button" hidden>Согласовать свойства и предложить тексты</button>
-  <button id="apply" hidden class="primary" type="button">Вставить подтверждённые компоненты</button>
+  <button id="apply" hidden class="primary" type="button">Добавить на фрейм</button>
 </section>
 
 <script>
 const $ = id => document.getElementById(id);
 let busy = false;
 let formPlaced = false;
-let approvals = [];
+let componentCount = 0;
 let stage = 'list';
 let flowApproved = false;
 let hasFlowDraft = false;
@@ -112,22 +115,25 @@ function setBusy(value) {
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
   $('approveFlow').disabled = value;
   $('createStates').hidden = !hasSource || !flowApproved;
-  $('items').querySelectorAll('input, select, button').forEach(control => { control.disabled = value; });
-  $('openProperties').disabled = value || !approvals.length;
-  $('listActions').hidden = stage !== 'list';
-  $('requestCopy').hidden = stage !== 'properties';
-  $('requestCopy').disabled = value || !approvals.length || !approvals.every(Boolean);
-  $('apply').hidden = stage !== 'copy';
-  $('apply').disabled = value || !approvals.length || !approvals.every(Boolean);
+  $('items').querySelectorAll('input, select, textarea, button').forEach(control => { control.disabled = value; });
+  $('openProperties').hidden = stage !== 'list';
+  $('openProperties').disabled = value || !componentCount;
+  $('listActions').hidden = !['list', 'copy'].includes(stage);
+  $('apply').hidden = stage !== 'ready';
+  $('apply').disabled = value;
   $('place').disabled = value || !selectedSize();
   $('prepare').disabled = $('task').disabled = value || !formPlaced;
 }
 
 function resetPlan() {
   $('plan').hidden = true;
+  $('target').textContent = '';
+  $('planTitle').textContent = 'Согласование компонентов';
   $('items').replaceChildren();
   $('revision').value = '';
-  approvals = [];
+  componentCount = 0;
+  stage = 'list';
+  $('componentChat').replaceChildren();
 }
 
 $('lightboxSize').onchange = () => {
@@ -164,6 +170,8 @@ $('prepare').onclick = () => {
   }
   resetPlan();
   setBusy(true);
+  $('plan').hidden = false;
+  addMessage('componentChat', 'Вы', $('task').value.trim());
   status('Готовлю запрос…');
   post('prepare', { task: $('task').value.trim(), standard: $('standard').value });
 };
@@ -177,14 +185,18 @@ $('revise').onclick = () => {
   }
   setBusy(true);
   status('Обновляю предложение…');
-  post('revise', { revision });
+  addMessage('componentChat', 'Вы', revision);
+  post(stage === 'copy' ? 'requestCopy' : 'revise', { revision });
 };
 
-function addFlowMessage(text) {
+function addMessage(chat, author, text) {
+  if (!text) return;
   const item = document.createElement('li');
-  item.style.whiteSpace = 'pre-wrap';
-  item.textContent = text;
-  $('flowChat').appendChild(item);
+  item.className = 'message' + (author === 'Вы' ? ' user' : '');
+  const name = document.createElement('strong');
+  name.textContent = author;
+  item.append(name, '\n' + text);
+  $(chat).appendChild(item);
 }
 
 for (const id of ['requirements', 'standard', 'feedback']) {
@@ -212,7 +224,7 @@ $('flowSend').onclick = () => {
   const feedback = $('feedback').value.trim();
   flowApproved = false;
   hasFlowDraft = false;
-  if (feedback) addFlowMessage('Вы — ' + feedback);
+  addMessage('flowChat', 'Вы', feedback || $('requirements').value.trim());
   setBusy(true);
   status('GigaCode проектирует сценарий…');
   post('requestFlow', { requirements: $('requirements').value, standard: $('standard').value, feedback });
@@ -250,16 +262,11 @@ async function requestModel(prompt) {
 
 $('openProperties').onclick = () => {
   setBusy(true);
+  addMessage('componentChat', 'Вы', 'Подтвердить набор компонентов');
   status('Готовлю превью…');
   post('openProperties');
 };
-$('requestCopy').onclick = () => {
-  setBusy(true);
-  status('GigaCode готовит тексты и ошибки…');
-  post('requestCopy');
-};
-
-function renderItem(index, item, confirmed = false) {
+function renderItem(index, item) {
   const card = document.createElement('li');
   const heading = document.createElement('strong');
   heading.textContent = item.text + ' · ' + item.name;
@@ -285,15 +292,23 @@ function renderItem(index, item, confirmed = false) {
   state.hidden = stage === 'copy';
   card.appendChild(state);
   const fields = new Map();
+  const fill = new Map();
   for (const field of item.fields) {
     const label = document.createElement('label');
-    label.hidden = stage === 'properties' ? field.type === 'TEXT' : field.type === 'BOOLEAN';
+    if (stage === 'copy' && field.type === 'BOOLEAN') continue;
     label.textContent = field.key.replace(/#.*$/, '');
     const input = document.createElement('input');
-    input.type = field.type === 'BOOLEAN' ? 'checkbox' : 'text';
+    const chooseFill = stage === 'properties' && field.type === 'TEXT';
+    input.type = chooseFill || field.type === 'BOOLEAN' ? 'checkbox' : 'text';
+    if (chooseFill) label.textContent = 'Заполнить «' + label.textContent + '»';
     if (input.type === 'checkbox') input.checked = Boolean(field.value);
     else input.value = field.value ?? '';
-    fields.set(field.key, input);
+    if (chooseFill) {
+      input.checked = item.fillKeys?.includes(field.key) ?? true;
+      fill.set(field.key, input);
+    } else {
+      fields.set(field.key, input);
+    }
     label.appendChild(input);
     card.appendChild(label);
   }
@@ -334,16 +349,17 @@ function renderItem(index, item, confirmed = false) {
   copySection.appendChild(hint);
   copySection.hidden = stage !== 'copy';
   card.insertBefore(copySection, state.nextSibling);
-  const error = document.createElement('input');
+  const error = document.createElement('textarea');
+  error.maxLength = 3000;
   error.value = item.error || '';
   const errorLabel = document.createElement('label');
-  errorLabel.textContent = 'Текст ошибки поля';
+  errorLabel.textContent = 'Состояния ошибки (условие и текст)';
   errorLabel.hidden = stage !== 'copy';
   errorLabel.appendChild(error);
   card.appendChild(errorLabel);
   const confirm = document.createElement('button');
   confirm.type = 'button';
-  confirm.textContent = confirmed ? 'Компонент подтверждён' : 'Подтвердить компонент';
+  confirm.textContent = stage === 'properties' ? 'Подтвердить свойства и предложить тексты' : 'Подтвердить тексты и ошибки';
   actions.appendChild(confirm);
   const refresh = document.createElement('button');
   refresh.type = 'button';
@@ -351,14 +367,8 @@ function renderItem(index, item, confirmed = false) {
   actions.appendChild(refresh);
   card.addEventListener('input', () => {
     refresh.textContent = 'Обновить превью · есть правки';
-    if (!approvals[index]) return;
-    approvals[index] = false;
-    confirm.textContent = 'Подтвердить компонент';
-    post('unconfirmItem', { index });
-    setBusy(false);
   });
   variant.onchange = () => {
-    approvals[index] = false;
     setBusy(true);
     post('chooseVariant', { index, variant: Number(variant.value) });
   };
@@ -366,10 +376,18 @@ function renderItem(index, item, confirmed = false) {
     const values = Object.fromEntries(Array.from(fields, ([key, input]) =>
       [key, input.type === 'checkbox' ? input.checked : input.value]));
     setBusy(true);
-    post(type, { index, variant: Number(variant.value), values, error: error.value });
+    post(type, { index, variant: Number(variant.value), values, error: error.value, fillKeys: Array.from(fill).filter(([, input]) => input.checked).map(([key]) => key) });
   };
   refresh.onclick = () => sendValues('previewItem');
-  confirm.onclick = () => sendValues('confirmItem');
+  confirm.onclick = () => {
+    const details = Array.from(fields, ([key, input]) => key.replace(/#.*$/, '') + ' — ' +
+      (input.type === 'checkbox' ? (input.checked ? 'включено' : 'выключено') : input.value));
+    for (const [key, input] of fill) details.push(key.replace(/#.*$/, '') + ' — ' + (input.checked ? 'заполнить' : 'оставить по умолчанию'));
+    if (stage === 'copy') details.push('Ошибки — ' + (error.value || 'без ошибок'));
+    else details.unshift('Вариант — ' + variant.selectedOptions[0].textContent);
+    addMessage('componentChat', 'Вы', heading.textContent + '\n' + details.join('\n'));
+    sendValues('confirmItem');
+  };
   return card;
 }
 
@@ -389,7 +407,7 @@ window.addEventListener('message', async event => {
     case 'flowProposal':
       $('feedback').value = '';
       hasFlowDraft = message.states.length > 0;
-      addFlowMessage([message.reply, ...message.states.map(state => [
+      addMessage('flowChat', 'GigaCode', [message.reply, ...message.states.map(state => [
         state.name + ' — ' + state.condition,
         ...Object.entries(state.values).map(([label, value]) => label + ' — ' + value),
         ...state.errors.map(error => 'Ошибка ' + (error.field || 'формы') + ' — ' + error.text)
@@ -415,14 +433,11 @@ window.addEventListener('message', async event => {
       break;
     case 'proposal':
       stage = 'list';
-      approvals = message.items.map(() => false);
-      $('planTitle').textContent = '1. Согласуйте набор компонентов';
+      componentCount = message.items.length;
+      $('planTitle').textContent = 'Согласование компонентов';
       $('revision').value = '';
-      $('items').replaceChildren(...message.items.map(item => {
-        const row = document.createElement('li');
-        row.textContent = item.text + ' · ' + item.name;
-        return row;
-      }));
+      addMessage('componentChat', 'GigaCode', [message.reply, ...message.items.map(item =>
+        item.text + ' · ' + item.name)].filter(Boolean).join('\n') || 'Список компонентов пуст.');
       $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
       $('plan').hidden = false;
       status(message.items.length ? '' : 'В предложении больше нет компонентов.');
@@ -438,20 +453,30 @@ window.addEventListener('message', async event => {
     case 'propertiesOpened':
     case 'copyOpened':
       stage = message.type === 'copyOpened' ? 'copy' : 'properties';
-      $('planTitle').textContent = stage === 'copy' ? '3. Согласуйте тексты, моки и ошибки' : '2. Согласуйте варианты и свойства';
-      approvals = message.items.map(() => false);
-      $('items').replaceChildren(...message.items.map((item, index) => renderItem(index, item)));
-      status('Проверьте и подтвердите каждую карточку.');
+      $('planTitle').textContent = 'Компонент ' + (message.index + 1) + ' из ' + message.total;
+      $('items').replaceChildren(renderItem(message.index, message.item));
+      if (stage === 'copy') {
+        $('revision').value = '';
+        addMessage('componentChat', 'GigaCode', [message.reply, ...message.item.copy.map(copy =>
+          copy.title + ' — ' + copy.value), message.item.error].filter(Boolean).join('\n'));
+      }
+      status('');
       break;
     case 'itemConfigured':
-      approvals[message.index] = message.confirmed;
-      $('items').children[message.index].replaceWith(renderItem(message.index, message.item, message.confirmed));
-      status(approvals.every(Boolean) ? 'Все компоненты подтверждены.' : '');
+      $('items').replaceChildren(renderItem(message.index, message.item));
+      status('');
+      break;
+    case 'readyToApply':
+      stage = 'ready';
+      $('items').replaceChildren();
+      $('planTitle').textContent = 'Компоненты согласованы';
+      status('');
       break;
     case 'applied':
       hasSource = true;
-      resetPlan();
-      status('Добавлено компонентов: ' + message.count + ' · ' + message.target);
+      stage = 'done';
+      addMessage('componentChat', 'Плагин', 'Добавлено компонентов: ' + message.count + ' · ' + message.target);
+      status('');
       break;
     case 'formPlaced':
       hasSource = false;
@@ -463,6 +488,7 @@ window.addEventListener('message', async event => {
       status('LightBox ' + message.size + ' поставлен.');
       break;
     case 'error':
+      if (!$('plan').hidden) addMessage('componentChat', 'Плагин', message.message);
       clearTimeout(placementTimer);
       placementTimer = undefined;
       status(message.message, true);
