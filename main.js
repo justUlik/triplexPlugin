@@ -20,7 +20,7 @@ let activeLibraryAssets;
 let activeLightboxComponent;
 let busy = false;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · Проверка фрейма' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.2' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -297,7 +297,7 @@ function describeItem(item, suggest = false, showAllFields = false) {
     fields: fields.filter(([key, property]) => property.type !== 'TEXT' ||
       showAllFields || !item.fillKeys || item.fillKeys.includes(key)).map(([key, property]) => ({
       key, type: property.type,
-      value: suggest && overrides.has(key) ? overrides.get(key) : item.values && Object.hasOwn(item.values, key)
+      value: suggest && overrides.has(key) ? overrides.get(key) : item.values && Object.prototype.hasOwnProperty.call(item.values, key)
         ? item.values[key] : overrides.get(key) ?? property.defaultValue
     }))
   };
@@ -504,7 +504,10 @@ function setInstanceValues(instance, values, name) {
     const type = typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT';
     if (fields[key]?.type !== type) throw new Error('Недоступно свойство «' + key + '» в «' + name + '».');
   }
-  if (Object.keys(values).length) instance.setProperties(values);
+  if (Object.keys(values).length) {
+    if (typeof instance.setProperties !== 'function') throw new Error('Pixso не поддерживает изменение свойств экземпляра через setProperties.');
+    instance.setProperties(values);
+  }
 }
 
 async function previewItem(item, suggest, showAllFields = false) {
@@ -517,6 +520,7 @@ async function previewItem(item, suggest, showAllFields = false) {
     const values = Object.fromEntries(description.fields.filter(field => field.value != null)
       .map(field => [field.key, field.value]));
     setInstanceValues(instance, values, item.name);
+    if (typeof instance.exportAsync !== 'function') throw new Error('Pixso не поддерживает экспорт экземпляра через exportAsync.');
     const png = await instance.exportAsync({ format: 'PNG' });
     return { ...description, png: Array.from(png) };
   } catch (error) {
