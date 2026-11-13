@@ -20,7 +20,7 @@ let activeLibraryAssets;
 let activeLightboxComponent;
 let busy = false;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.4' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.5' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -274,10 +274,27 @@ async function reviewCopy(raw) {
 }
 
 function editableProperties(component) {
-  return Object.entries({
+  const properties = Object.entries({
     ...(component.parent?.type === 'COMPONENT_SET' ? component.parent.componentPropertyDefinitions : {}),
     ...component.componentPropertyDefinitions
   }).filter(([, property]) => property.type === 'TEXT' || property.type === 'BOOLEAN');
+  if (properties.some(([key, property]) => property.type === 'TEXT' && isLabel(key))) return properties;
+  const labels = [];
+  function visit(node, path) {
+    if (node.visible === false) return;
+    if (node.type === 'TEXT' && (isLabel(node.name) || isLabel(node.characters))) {
+      labels.push(['Label#layer:' + path.join('.'), { type: 'TEXT', defaultValue: node.characters }]);
+    }
+    Array.from(node.children || []).forEach((child, index) => visit(child, [...path, index]));
+  }
+  Array.from(component.children || []).forEach((child, index) => visit(child, [index]));
+  if (labels.length === 1) properties.push(labels[0]);
+  return properties;
+}
+
+function isLabel(name) {
+  return /^(?:label|caption|title|field[ _-]?label|заголовок|подпись)(?:#|$)/i.test(name);
+
 }
 
 function describeItem(item, suggest = false, showAllFields = false) {
@@ -285,17 +302,17 @@ function describeItem(item, suggest = false, showAllFields = false) {
   const textKeys = fields.filter(([, property]) => property.type === 'TEXT').map(([key]) => key);
   const overrides = new Map(Object.entries(item.texts || {}));
   const copy = [];
-  const put = (title, pattern, value) => {
-    const key = textKeys.find(key => pattern.test(key) && (!item.fillKeys || item.fillKeys.includes(key)));
+  const put = (title, matches, value) => {
+    const key = textKeys.find(key => matches(key) && (!item.fillKeys || item.fillKeys.includes(key)));
     if (!key && value != null && value !== '' && !Object.values(item.texts || {}).includes(value)) {
       copy.push({ title, value });
     }
     if (key && value != null && !overrides.has(key)) overrides.set(key, value);
     return Boolean(key);
   };
-  const label = put('Подпись', /^(?:label|caption|title|field[ _-]?label|заголовок|подпись)(?:#|$)/i, item.text);
-  const placeholder = put('Плейсхолдер', /^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i, item.placeholder);
-  const value = put('Моковое значение', /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i, item.value);
+  const label = put('Подпись', isLabel, item.text);
+  const placeholder = put('Плейсхолдер', key => /^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i.test(key), item.placeholder);
+  const value = put('Моковое значение', key => /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i.test(key), item.value);
   return {
     name: item.name, text: item.text, copy, error: item.error, fillKeys: item.fillKeys,
     missing: [!label && 'подпись', item.placeholder && !placeholder && 'плейсхолдер',
@@ -511,15 +528,35 @@ async function resolveComponent(binding) {
   return component;
 }
 
-function setInstanceValues(instance, values, name) {
+async function setInstanceValues(instance, values, name) {
+  const overrides = Object.create(null);
+  const layers = [];
   const fields = instance.componentProperties || {};
   for (const [key, value] of Object.entries(values)) {
+    if (key.startsWith('Label#layer:')) {
+      layers.push([key, value]);
+      continue;
+    }
+    overrides[key] = value;
     const type = typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT';
     if (fields[key]?.type !== type) throw new Error('Недоступно свойство «' + key + '» в «' + name + '».');
   }
-  if (Object.keys(values).length) {
+  if (Object.keys(overrides).length) {
     if (typeof instance.setProperties !== 'function') throw new Error('Pixso не поддерживает изменение свойств экземпляра через setProperties.');
-    instance.setProperties(values);
+    instance.setProperties({ ...overrides });
+  }
+  for (const [key, value] of layers) {
+    const layer = key.slice('Label#layer:'.length).split('.')
+      .reduce((node, index) => node?.children?.[Number(index)], instance);
+    if (layer?.type !== 'TEXT' || (!isLabel(layer.name) && !isLabel(layer.characters))) {
+      throw new Error('Вложенная подпись недоступна в «' + name + '».');
+    }
+    if (layer.characters === value) continue;
+    const fonts = typeof layer.getRangeAllFontNames === 'function' && layer.characters.length
+      ? layer.getRangeAllFontNames(0, layer.characters.length) : [layer.fontName];
+    for (const font of fonts) await pixso.loadFontAsync(font);
+    layer.characters = value;
+    if (layer.characters !== value) throw new Error('Pixso не применил текст вложенной подписи в «' + name + '».');
   }
 }
 
@@ -532,7 +569,7 @@ async function previewItem(item, suggest, showAllFields = false) {
     instance.y = pixso.viewport.center.y;
     const values = Object.fromEntries(description.fields.filter(field => field.value != null)
       .map(field => [field.key, field.value]));
-    setInstanceValues(instance, values, item.name);
+    await setInstanceValues(instance, values, item.name);
     if (typeof instance.exportAsync !== 'function') throw new Error('Pixso не поддерживает экспорт экземпляра через exportAsync.');
     const png = await instance.exportAsync({ format: 'PNG' });
     return { ...description, png: Array.from(png) };
@@ -543,11 +580,11 @@ async function previewItem(item, suggest, showAllFields = false) {
   }
 }
 
-function insert(parent, item) {
+async function insert(parent, item) {
   const instance = item.variants[item.variant].createInstance();
   try {
     parent.appendChild(instance);
-    setInstanceValues(instance, item.values, item.name);
+    await setInstanceValues(instance, item.values, item.name);
     if (item.error) instance.setPluginData('triplex-field-error', item.error);
     return instance;
   } catch (error) {
@@ -572,7 +609,7 @@ async function apply() {
   const previousSizing = frame[axis];
   const inserted = [];
   try {
-    for (const item of context.items) inserted.push(insert(body, item));
+    for (const item of context.items) inserted.push(await insert(body, item));
     if (Math.abs(frame.width - width) > 0.1) {
       if (previousSizing === 'AUTO') frame[axis] = 'FIXED';
       frame.resizeWithoutConstraints(width, frame.height);
