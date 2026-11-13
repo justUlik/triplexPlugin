@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 13.11.2</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 13.11.3</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Подключение GigaCode CLI</summary>
@@ -313,6 +313,7 @@ function renderItem(index, item) {
     card.appendChild(label);
   }
   const copySection = document.createElement('div');
+  const unmapped = [];
   for (const copy of item.copy) {
     const row = document.createElement('label');
     row.textContent = copy.title + ' от GigaCode';
@@ -324,7 +325,7 @@ function renderItem(index, item) {
     for (const field of item.fields.filter(field => field.type === 'TEXT')) {
       destination.add(new Option(field.key.replace(/#.*$/, ''), field.key));
     }
-    destination.value = copy.key || '';
+    unmapped.push({ draft, destination });
     row.appendChild(destination);
     const use = document.createElement('button');
     use.type = 'button';
@@ -336,6 +337,7 @@ function renderItem(index, item) {
         return;
       }
       input.value = draft.value;
+      draft.value = '';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     };
     row.appendChild(use);
@@ -373,6 +375,12 @@ function renderItem(index, item) {
     post('chooseVariant', { index, variant: Number(variant.value) });
   };
   const sendValues = type => {
+    if (stage === 'copy') {
+      for (const { draft, destination } of unmapped) {
+        const input = fields.get(destination.value);
+        if (input && draft.value) input.value = draft.value;
+      }
+    }
     const values = Object.fromEntries(Array.from(fields, ([key, input]) =>
       [key, input.type === 'checkbox' ? input.checked : input.value]));
     setBusy(true);
@@ -457,7 +465,8 @@ window.addEventListener('message', async event => {
       $('items').replaceChildren(renderItem(message.index, message.item));
       if (stage === 'copy') {
         $('revision').value = '';
-        addMessage('componentChat', 'GigaCode', [message.reply, ...message.item.copy.map(copy =>
+        addMessage('componentChat', 'GigaCode', [message.reply, ...message.item.fields.filter(field => field.type === 'TEXT' && field.value).map(field =>
+          field.key.replace(/#.*$/, '') + ' — ' + field.value), ...message.item.copy.map(copy =>
           copy.title + ' — ' + copy.value), message.item.error].filter(Boolean).join('\n'));
       }
       status('');

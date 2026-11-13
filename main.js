@@ -20,7 +20,7 @@ let activeLibraryAssets;
 let activeLightboxComponent;
 let busy = false;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.2' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.3' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -245,7 +245,7 @@ function requestCopy(revision = '') {
   send('copyRequest', { prompt: [
     'Согласуй тексты одного компонента. Следуй текстовому стандарту.',
     'Учитывай выбранные свойства. Укажи каждое возможное состояние ошибки отдельной строкой в error в формате «условие — текст». Используй только известные правила проверки. Если ошибок нет, верни пустую строку.',
-    'Верни только JSON: {"reply":"Пояснение или вопрос","text":"Подпись","placeholder":"","value":"","error":""}.',
+    'Верни только JSON: {"reply":"Пояснение или вопрос","text":"Подпись","placeholder":"","value":"","texts":{},"error":""}. Заполни texts согласованными текстами по точным ключам TEXT из component.fields. Для незаполняемых свойств не добавляй ключи.',
     'Если есть revision, внеси только запрошенные изменения.',
     JSON.stringify({ task: prepared.task, requirements: flow?.requirements, standard: prepared.standard,
       component: description, fillKeys: item.fillKeys, revision })
@@ -260,9 +260,14 @@ async function reviewCopy(raw) {
     throw new Error('GigaCode вернул неполные тексты. Запросите их снова.');
   }
   const { index, items } = prepared;
-  const item = { ...items[index], text: entry.text, placeholder: entry.placeholder, value: entry.value,
+  const current = items[index];
+  const texts = Object.fromEntries(Object.entries(entry.texts || {}).filter(([key, value]) =>
+    current.fillKeys?.includes(key) && typeof value === 'string' && value.length <= 3000));
+  const item = { ...current, texts, text: entry.text, placeholder: entry.placeholder, value: entry.value,
     error: entry.error || '', confirmed: false };
   const preview = await previewItem(item, true);
+  item.values = { ...current.values, ...Object.fromEntries(preview.fields
+    .filter(field => field.type === 'TEXT' && field.value != null).map(field => [field.key, field.value])) };
   items[index] = item;
   prepared.stage = 'copy';
   send('copyOpened', { index, total: items.length, item: preview, reply: entry.reply });
@@ -278,12 +283,14 @@ function editableProperties(component) {
 function describeItem(item, suggest = false, showAllFields = false) {
   const fields = editableProperties(item.variants[item.variant]);
   const textKeys = fields.filter(([, property]) => property.type === 'TEXT').map(([key]) => key);
-  const overrides = new Map();
+  const overrides = new Map(Object.entries(item.texts || {}));
   const copy = [];
   const put = (title, pattern, value) => {
     const key = textKeys.find(key => pattern.test(key) && (!item.fillKeys || item.fillKeys.includes(key)));
-    if (value != null && value !== '') copy.push({ title, value, key });
-    if (key && value != null) overrides.set(key, value);
+    if (!key && value != null && value !== '' && !Object.values(item.texts || {}).includes(value)) {
+      copy.push({ title, value });
+    }
+    if (key && value != null && !overrides.has(key)) overrides.set(key, value);
     return Boolean(key);
   };
   const label = put('Подпись', /^(?:label|caption|title|field[ _-]?label|заголовок|подпись)(?:#|$)/i, item.text);
