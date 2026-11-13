@@ -1,0 +1,6 @@
+{
+  "name": "Triplex · Сборка экранов",
+  "id": "triplex-screen-builder-local",
+  "main": "./main.js",
+  "ui": "./ui.html"
+}

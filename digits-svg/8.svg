@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="403 751 144 144" role="img" aria-label="8">
+  <defs>
+    <linearGradient id="pink" gradientUnits="userSpaceOnUse" x1="421" y1="850" x2="530" y2="796">
+      <stop stop-color="#ff7658"/>
+      <stop offset=".52" stop-color="#d5294b"/>
+      <stop offset="1" stop-color="#570b1c"/>
+    </linearGradient>
+    <linearGradient id="highlight" gradientUnits="userSpaceOnUse" x1="403" y1="761" x2="403" y2="885">
+      <stop stop-color="#ff9870" stop-opacity=".43"/>
+      <stop offset=".68" stop-color="#ff4b69" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#df284b" stop-opacity=".76"/>
+    </linearGradient>
+    <filter id="volume" filterUnits="userSpaceOnUse" x="403" y="751" width="144" height="144" color-interpolation-filters="sRGB">
+      <feMorphology in="SourceAlpha" operator="erode" radius="1.35" result="inner"/>
+      <feGaussianBlur in="inner" stdDeviation=".65" result="softInner"/>
+      <feComposite in="SourceAlpha" in2="softInner" operator="out" result="rim"/>
+      <feFlood flood-color="#ffb4a8" flood-opacity=".28" result="rimColor"/>
+      <feComposite in="rimColor" in2="rim" operator="in" result="whiteRim"/>
+      <feMerge>
+        <feMergeNode in="SourceGraphic"/>
+        <feMergeNode in="whiteRim"/>
+      </feMerge>
+    </filter>
+    <filter id="softHighlight" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.25"/>
+    </filter>
+  </defs>
+  <g filter="url(#volume)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M443 775 H506 V790 C506 803 488 813 475 820 C450 820 434 831 434 845 C434 859 445 868 461 868 H489 C504 868 515 859 515 845 C515 831 500 820 475 820 C461 813 443 803 443 790 Z" stroke="url(#pink)" stroke-width="27"/>
+    <path d="M443 775 H506 V790 C506 803 488 813 475 820 C450 820 434 831 434 845 C434 859 445 868 461 868 H489 C504 868 515 859 515 845 C515 831 500 820 475 820 C461 813 443 803 443 790 Z" stroke="url(#highlight)" stroke-width="15" transform="translate(1 1)" filter="url(#softHighlight)"/>
+  </g>
+</svg>

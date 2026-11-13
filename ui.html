@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light; font: 14px system-ui, sans-serif; color: #172e25; background: #f5f8f6; }
+  body { margin: 0; padding: 20px; }
+  [hidden] { display: none; }
+  p { margin: 6px 0 12px; }
+  .hint { color: #496057; font-size: 12px; line-height: 1.45; }
+  label { display: block; margin: 8px 0; font-weight: 600; }
+  input, select, textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; padding: 8px;
+    border-radius: 7px; border: 1px solid #a9bcb3; background: white; color: inherit; font: inherit; }
+  textarea { resize: vertical; min-height: 72px; }
+  button { border: 1px solid #a9bcb3; background: white; color: inherit; padding: 8px 12px; border-radius: 7px;
+    font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary { background: #087647; color: white; border-color: #087647; }
+  button:disabled { opacity: .55; cursor: default; }
+  details { margin: 12px 0; padding: 10px 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
+  summary { font-weight: 600; cursor: pointer; }
+  #status { min-height: 20px; line-height: 1.4; }
+  #status.error { color: #a22222; }
+</style>
+</head>
+<body>
+<label>Размер LightBox
+  <select id="lightboxSize">
+    <option value="">Выберите размер</option>
+    <option value="SM">SM</option>
+    <option value="MD">MD</option>
+    <option value="LG">LG</option>
+    <option value="XL">XL</option>
+  </select>
+</label>
+<button id="place" class="primary" type="button" disabled>Поставить</button>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 11.11.2</p>
+<section id="formSetup" hidden>
+  <details id="modelSettings">
+    <summary>Подключение GigaCode CLI</summary>
+    <label>Код из терминала <input id="token" type="password" autocomplete="off"></label>
+  </details>
+
+  <details>
+    <summary>Бизнес-требования и сценарий</summary>
+    <label>Бизнес-требования <textarea id="requirements" maxlength="12000"></textarea></label>
+    <label>Правила текстового стандарта Triplex <textarea id="standard" maxlength="8000" placeholder="Вставьте правила канала для этой формы"></textarea></label>
+    <ol id="flowChat" aria-live="polite"></ol>
+    <label>Сообщение для GigaCode <textarea id="feedback" maxlength="2000" placeholder="Например, добавь ветку ошибки проверки"></textarea></label>
+    <button id="flowSend" type="button">Отправить</button>
+    <button id="approveFlow" type="button" hidden>Утвердить состояния и ошибки</button>
+  </details>
+
+  <p class="hint">Настройте LightBox на холсте. Выделите внутренний фрейм с автолейаутом или оставьте BodyPage по умолчанию.</p>
+  <label>Что нужно сделать
+    <textarea id="task" maxlength="3000" placeholder="Добавь поля для названия компании и рабочей почты"></textarea>
+  </label>
+  <button id="prepare" class="primary" type="button">Предложить компоненты</button>
+
+</section>
+
+<button id="createStates" type="button" hidden>Утвердить экран и создать состояния</button>
+<p id="status" role="status" aria-live="polite">Интерфейс загружается…</p>
+<section id="plan" hidden>
+  <h2>Предложенные компоненты</h2>
+  <p id="target" class="hint"></p>
+  <ol id="items"></ol>
+  <label>Что изменить в предложении
+    <textarea id="revision" maxlength="3000" placeholder="Убери телефон. Вместо поля «Тип» поставь список."></textarea>
+  </label>
+  <button id="revise" type="button">Обновить предложение</button>
+  <button id="apply" class="primary" type="button">Подтвердить и вставить</button>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+let busy = false;
+let formPlaced = false;
+let proposedCount = 0;
+let flowApproved = false;
+let hasFlowDraft = false;
+let hasSource = false;
+
+function selectedSize() {
+  return $('lightboxSize').value;
+}
+let placementTimer;
+
+function post(type, data = {}) {
+  parent.postMessage({ pluginMessage: { type, ...data } }, '*');
+}
+
+function status(text, error = false) {
+  $('status').hidden = !text;
+  $('status').textContent = text;
+  $('status').classList.toggle('error', error);
+}
+
+function setBusy(value) {
+  busy = value;
+  for (const id of ['revise', 'revision', 'token', 'requirements', 'standard', 'feedback', 'flowSend', 'createStates']) {
+    $(id).disabled = value;
+  }
+  $('approveFlow').hidden = !hasFlowDraft || flowApproved;
+  $('approveFlow').disabled = value;
+  $('createStates').hidden = !hasSource || !flowApproved;
+  $('apply').disabled = value || !proposedCount;
+  $('place').disabled = value || !selectedSize();
+  $('prepare').disabled = $('task').disabled = value || !formPlaced;
+}
+
+function resetPlan() {
+  $('plan').hidden = true;
+  $('items').replaceChildren();
+  $('revision').value = '';
+  proposedCount = 0;
+}
+
+$('lightboxSize').onchange = () => {
+  if (!busy) {
+    status('');
+    setBusy(false);
+  }
+};
+
+$('place').onclick = () => {
+  const size = selectedSize();
+  if (busy || !size) return;
+  resetPlan();
+  setBusy(true);
+  status('Ставлю LightBox ' + size + ' в Pixso…');
+  placementTimer = setTimeout(() => {
+    placementTimer = undefined;
+    setBusy(false);
+    status('Pixso не ответил за 20 секунд. Переоткройте окно локального плагина и попробуйте снова.', true);
+  }, 20000);
+  post('placeLightbox', { size });
+};
+
+for (const id of ['task', 'token']) {
+  $(id).addEventListener('input', resetPlan);
+}
+
+$('prepare').onclick = () => {
+  if (busy) return;
+  if (!$('token').value.trim()) {
+    $('modelSettings').open = true;
+    status('Введите код подключения из терминала.');
+    return;
+  }
+  resetPlan();
+  setBusy(true);
+  status('Готовлю запрос…');
+  post('prepare', { task: $('task').value.trim() });
+};
+
+$('revise').onclick = () => {
+  if (busy) return;
+  const revision = $('revision').value.trim();
+  if (!revision) {
+    status('Опишите, что изменить в предложении.');
+    return;
+  }
+  setBusy(true);
+  status('Обновляю предложение…');
+  post('revise', { revision });
+};
+
+function addFlowMessage(text) {
+  const item = document.createElement('li');
+  item.style.whiteSpace = 'pre-wrap';
+  item.textContent = text;
+  $('flowChat').appendChild(item);
+}
+
+for (const id of ['requirements', 'standard', 'feedback']) {
+  $(id).addEventListener('input', () => {
+    flowApproved = false;
+    hasFlowDraft = false;
+    post('invalidateFlow');
+    setBusy(busy);
+  });
+}
+
+$('approveFlow').onclick = () => {
+  if (busy || !hasFlowDraft) return;
+  setBusy(true);
+  post('approveFlow');
+};
+
+$('flowSend').onclick = () => {
+  if (busy) return;
+  if (!$('token').value.trim()) {
+    $('modelSettings').open = true;
+    status('Введите код подключения из терминала.');
+    return;
+  }
+  const feedback = $('feedback').value.trim();
+  flowApproved = false;
+  hasFlowDraft = false;
+  if (feedback) addFlowMessage('Вы — ' + feedback);
+  setBusy(true);
+  status('GigaCode проектирует сценарий…');
+  post('requestFlow', { requirements: $('requirements').value, standard: $('standard').value, feedback });
+};
+
+$('createStates').onclick = () => {
+  if (busy) return;
+  setBusy(true);
+  post('createStates');
+};
+
+$('apply').onclick = () => {
+  if (busy) return;
+  setBusy(true);
+  status('Собираю экран в Pixso…');
+  post('apply');
+};
+
+async function requestModel(prompt) {
+  let response;
+  try {
+    response = await fetch('http://127.0.0.1:43127/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + $('token').value.trim() },
+      redirect: 'error',
+      body: JSON.stringify({ prompt })
+    });
+  } catch {
+    throw new Error('Не удалось подключиться. Проверьте, что мост GigaCode запущен на этом компьютере и Pixso разрешён доступ к нему.');
+  }
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Ошибка подключения к GigaCode CLI.');
+  return data.result;
+}
+
+window.addEventListener('message', async event => {
+  if (event.source && event.source !== parent) return;
+  const message = event.data?.pluginMessage;
+  if (!message) return;
+  switch (message.type) {
+    case 'flowRequest':
+      try {
+        post('reviewFlow', { raw: await requestModel(message.prompt) });
+        return;
+      } catch (error) {
+        status(error.message, true);
+      }
+      break;
+    case 'flowProposal':
+      $('feedback').value = '';
+      hasFlowDraft = message.states.length > 0;
+      addFlowMessage([message.reply, ...message.states.map(state => [
+        state.name + ' — ' + state.condition,
+        ...Object.entries(state.values).map(([label, value]) => label + ' — ' + value),
+        ...state.errors.map(error => 'Ошибка ' + (error.field || 'формы') + ' — ' + error.text)
+      ].join('\n'))].join('\n\n'));
+      status('');
+      break;
+    case 'flowApproved':
+      flowApproved = true;
+      status('Состояния и тексты ошибок утверждены.');
+      break;
+    case 'statesCreated':
+      status('Создано фреймов: ' + message.count + (message.skipped ? ' · Не удалось заполнить значений: ' + message.skipped : '') +
+        (message.errorsPending ? ' · Текстов ошибок для ручного оформления: ' + message.errorsPending : ''));
+      break;
+    case 'prepared':
+      status('GigaCode подбирает компоненты…');
+      try {
+        post('review', { raw: await requestModel(message.prompt) });
+        return;
+      } catch (error) {
+        status(error.message, true);
+      }
+      break;
+    case 'proposal':
+      proposedCount = message.items.length;
+      $('revision').value = '';
+      $('items').replaceChildren(...message.items.map(item => {
+        const li = document.createElement('li');
+        li.textContent = item.text + ' · ' + item.name + (item.visibleLabel ? '' : ' (подпись в имени слоя)');
+        if (item.placeholder) li.textContent += item.supportsPlaceholder
+          ? ' · Плейсхолдер «' + item.placeholder + '»'
+          : ' · У компонента нет свойства для плейсхолдера';
+        return li;
+      }));
+      $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
+      $('plan').hidden = false;
+      status(proposedCount ? '' : 'В предложении больше нет компонентов.');
+      break;
+    case 'applied':
+      hasSource = true;
+      resetPlan();
+      status('Добавлено компонентов: ' + message.count + ' · ' + message.target);
+      break;
+    case 'formPlaced':
+      hasSource = false;
+      clearTimeout(placementTimer);
+      placementTimer = undefined;
+      formPlaced = true;
+      $('formSetup').hidden = false;
+      $('modelSettings').open = !$('token').value.trim();
+      status('LightBox ' + message.size + ' поставлен.');
+      break;
+    case 'error':
+      clearTimeout(placementTimer);
+      placementTimer = undefined;
+      status(message.message, true);
+      break;
+    default:
+      return;
+  }
+  setBusy(false);
+});
+
+setBusy(false);
+status('');
+</script>
+</body>
+</html>
