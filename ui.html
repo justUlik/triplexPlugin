@@ -62,14 +62,14 @@
 <button id="createStates" type="button" hidden>Утвердить экран и создать состояния</button>
 <p id="status" role="status" aria-live="polite">Интерфейс загружается…</p>
 <section id="plan" hidden>
-  <h2>Предложенные компоненты</h2>
+  <h2>Компоненты и тексты для утверждения</h2>
   <p id="target" class="hint"></p>
   <ol id="items"></ol>
   <label>Что изменить в предложении
     <textarea id="revision" maxlength="3000" placeholder="Убери телефон. Вместо поля «Тип» поставь список."></textarea>
   </label>
   <button id="revise" type="button">Обновить предложение</button>
-  <button id="apply" class="primary" type="button">Подтвердить и вставить</button>
+  <button id="apply" class="primary" type="button">Утвердить тексты и вставить</button>
 </section>
 
 <script>
@@ -275,19 +275,25 @@ window.addEventListener('message', async event => {
       }
       break;
     case 'proposal':
-      proposedCount = message.items.length;
+      proposedCount = message.items.some(item => item.missing.length) ? 0 : message.items.length;
       $('revision').value = '';
       $('items').replaceChildren(...message.items.map(item => {
         const li = document.createElement('li');
-        li.textContent = item.text + ' · ' + item.name + (item.visibleLabel ? '' : ' (подпись в имени слоя)');
-        if (item.placeholder) li.textContent += item.supportsPlaceholder
-          ? ' · Плейсхолдер «' + item.placeholder + '»'
-          : ' · У компонента нет свойства для плейсхолдера';
+        li.textContent = [
+          item.name,
+          'Подпись — ' + item.text,
+          item.placeholder ? 'Плейсхолдер — ' + item.placeholder : '',
+          item.value ? 'Моковое значение — ' + item.value : '',
+          item.missing.length ? 'В библиотеке нет доступного свойства: ' + item.missing.join(', ') : ''
+        ].filter(Boolean).join('\n');
+        li.style.whiteSpace = 'pre-wrap';
         return li;
       }));
       $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
       $('plan').hidden = false;
-      status(proposedCount ? '' : 'В предложении больше нет компонентов.');
+      status(proposedCount ? '' : message.items.length
+        ? 'Замени отмеченный компонент или убери недоступный текст в правках к предложению.'
+        : 'В предложении больше нет компонентов.');
       break;
     case 'applied':
       hasSource = true;

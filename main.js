@@ -146,14 +146,15 @@ function sendPlanRequest(revision) {
   const prompt = [
     'Предложи поля для формы из доступных компонентов Triplex.',
     'Используй только числовые ID из каталога. Верни до 12 элементов в порядке вставки.',
-    'Ответь только JSON: {"items":[{"id":1,"text":"Подпись поля","placeholder":"Например, ООО Ромашка"}]}.',
+    'Ответь только JSON: {"items":[{"id":1,"text":"Подпись поля","placeholder":"Например, ООО Ромашка","value":"ООО Ромашка"}]}.',
     'Подписи на русском, до 120 символов в одну строку. Если подходящих компонентов нет, верни {"reason":"причина"}.',
     'Следуй textStandard для всех подписей и подсказок. Сохраняй термины бизнес-требований.',
+    'Для заполняемых полей предложи вымышленное значение value по задаче. Плейсхолдер и значение — разные свойства. Если нужен пустой экран или компонент не принимает текстовое значение, пропусти value.',
     'Для текстовых полей предложи короткую подсказку по задаче. Используй точный плейсхолдер, если пользователь его указал. Для кнопок и чекбоксов пропусти placeholder.',
     'Если есть revision, отредактируй текущий список по этим правкам и верни весь новый список. Сохрани позиции, которые пользователь не просил менять.',
     JSON.stringify({
       task, components, revision, requirements: flow?.requirements, textStandard: flow?.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
-      currentItems: revision ? items.map(({ id, text, placeholder }) => ({ id, text, placeholder })) : undefined
+      currentItems: revision ? items.map(({ id, text, placeholder, value }) => ({ id, text, placeholder, value })) : undefined
     })
   ].join('\n');
   send('prepared', { prompt });
@@ -184,7 +185,11 @@ async function review(raw) {
         (typeof placeholder !== 'string' || placeholder.length > 120 || /[\r\n]/.test(placeholder))) {
       throw new Error('GigaCode вернул некорректный плейсхолдер.');
     }
-    return { id: item.id, text: item.text.trim(), placeholder: placeholder?.trim() };
+    const value = item.value;
+    if (value != null && (typeof value !== 'string' || value.length > 120 || /[\r\n]/.test(value))) {
+      throw new Error('GigaCode вернул некорректное моковое значение.');
+    }
+    return { id: item.id, text: item.text.trim(), placeholder: placeholder?.trim(), value: value?.trim() };
   });
   const parts = new Map();
   for (const id of new Set(items.map(item => item.id))) {
@@ -207,16 +212,24 @@ async function review(raw) {
     const fields = Object.entries(component.componentPropertyDefinitions || {})
       .filter(([, property]) => property.type === 'TEXT').map(([key]) => key);
     const placeholderProperty = fields.find(key => /^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i.test(key));
-    const property = fields.find(key => /^(?:label|caption|title|заголовок|подпись)(?:#|$)/i.test(key)) ||
-      (fields.length === 1 && fields[0] !== placeholderProperty ? fields[0] : undefined);
-    parts.set(id, { component, property, placeholderProperty, name: asset.name });
+    const valueProperty = fields.find(key => /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i.test(key));
+    const property = fields.find(key => /^(?:label|caption|title|field[ _-]?label|заголовок|подпись)(?:#|$)/i.test(key)) ||
+      (fields.length === 1 && !placeholderProperty && !valueProperty ? fields[0] : undefined);
+    parts.set(id, { component, property, placeholderProperty, valueProperty, name: asset.name });
   }
-  prepared.items = items.map(item => ({ ...parts.get(item.id), ...item }));
+  prepared.items = items.map(item => {
+    const part = parts.get(item.id);
+    const missing = [];
+    if (!part.property) missing.push('подпись');
+    if (item.placeholder && !part.placeholderProperty) missing.push('плейсхолдер');
+    if (item.value && !part.valueProperty) missing.push('моковое значение');
+    return { ...part, ...item, missing };
+  });
   const target = pixso.getNodeById(prepared.bodyId);
   send('proposal', {
     target: target?.name,
-    items: prepared.items.map(({ name, text, property, placeholder, placeholderProperty }) => ({
-      name, text, placeholder, visibleLabel: Boolean(property), supportsPlaceholder: Boolean(placeholderProperty)
+    items: prepared.items.map(({ name, text, placeholder, value, missing }) => ({
+      name, text, placeholder, value, missing
     }))
   });
 }
@@ -372,18 +385,20 @@ async function resolveComponent(binding) {
   return component;
 }
 
-function insert(parent, { component, property, text, placeholderProperty, placeholder }) {
-  const instance = component.createInstance();
+function insert(parent, item) {
+  const instance = item.component.createInstance();
   try {
     parent.appendChild(instance);
     const fields = instance.componentProperties || {};
     const properties = {};
-    if (property && fields[property]?.type === 'TEXT') properties[property] = text;
-    else instance.name = text;
-    if (placeholder && placeholderProperty && fields[placeholderProperty]?.type === 'TEXT') {
-      properties[placeholderProperty] = placeholder;
+    for (const [key, value] of [[item.property, item.text], [item.placeholderProperty, item.placeholder], [item.valueProperty, item.value]]) {
+      if (!value) continue;
+      if (!key || fields[key]?.type !== 'TEXT') {
+        throw new Error('Pixso не открыл текстовое свойство для «' + value + '» в компоненте «' + item.name + '».');
+      }
+      properties[key] = value;
     }
-    if (Object.keys(properties).length) instance.setProperties(properties);
+    instance.setProperties(properties);
     return instance;
   } catch (error) {
     if (!instance.removed) instance.remove();
@@ -394,6 +409,9 @@ function insert(parent, { component, property, text, placeholderProperty, placeh
 async function apply() {
   const context = prepared;
   if (!context?.items?.length) throw new Error('Сначала получите список компонентов.');
+  if (context.items.some(item => item.missing.length)) {
+    throw new Error('В предложении есть тексты, которые нельзя заполнить. Уточните предложение перед вставкой.');
+  }
   const frame = getActiveForm(context.frameId);
   const body = pixso.getNodeById(context.bodyId);
   if (!isFormBody(frame, body) || activeFormId !== frame.id) {
