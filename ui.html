@@ -19,6 +19,8 @@
   button:disabled { opacity: .55; cursor: default; }
   details { margin: 12px 0; padding: 10px 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
   summary { font-weight: 600; cursor: pointer; }
+  #items > li { padding: 12px; margin-bottom: 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
+  #items input[type="checkbox"] { display: inline-block; width: auto; margin-left: 8px; }
   #status { min-height: 20px; line-height: 1.4; }
   #status.error { color: #a22222; }
 </style>
@@ -69,14 +71,14 @@
     <textarea id="revision" maxlength="3000" placeholder="Убери телефон. Вместо поля «Тип» поставь список."></textarea>
   </label>
   <button id="revise" type="button">Обновить предложение</button>
-  <button id="apply" class="primary" type="button">Утвердить тексты и вставить</button>
+  <button id="apply" class="primary" type="button">Вставить подтверждённые компоненты</button>
 </section>
 
 <script>
 const $ = id => document.getElementById(id);
 let busy = false;
 let formPlaced = false;
-let proposedCount = 0;
+let approvals = [];
 let flowApproved = false;
 let hasFlowDraft = false;
 let hasSource = false;
@@ -104,7 +106,8 @@ function setBusy(value) {
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
   $('approveFlow').disabled = value;
   $('createStates').hidden = !hasSource || !flowApproved;
-  $('apply').disabled = value || !proposedCount;
+  $('items').querySelectorAll('input, select, button').forEach(control => { control.disabled = value; });
+  $('apply').disabled = value || !approvals.length || !approvals.every(Boolean);
   $('place').disabled = value || !selectedSize();
   $('prepare').disabled = $('task').disabled = value || !formPlaced;
 }
@@ -113,7 +116,7 @@ function resetPlan() {
   $('plan').hidden = true;
   $('items').replaceChildren();
   $('revision').value = '';
-  proposedCount = 0;
+  approvals = [];
 }
 
 $('lightboxSize').onchange = () => {
@@ -151,7 +154,7 @@ $('prepare').onclick = () => {
   resetPlan();
   setBusy(true);
   status('Готовлю запрос…');
-  post('prepare', { task: $('task').value.trim() });
+  post('prepare', { task: $('task').value.trim(), standard: $('standard').value });
 };
 
 $('revise').onclick = () => {
@@ -234,6 +237,91 @@ async function requestModel(prompt) {
   return data.result;
 }
 
+function renderItem(index, item, confirmed = false) {
+  const card = document.createElement('li');
+  const heading = document.createElement('strong');
+  heading.textContent = item.text + ' · ' + item.name;
+  card.appendChild(heading);
+  const variant = document.createElement('select');
+  item.variants.forEach((name, i) => variant.add(new Option(name, i)));
+  variant.value = item.variant;
+  const state = document.createElement('label');
+  state.textContent = 'Базовый вариант';
+  state.appendChild(variant);
+  card.appendChild(state);
+  const fields = new Map();
+  for (const field of item.fields) {
+    const label = document.createElement('label');
+    label.textContent = field.key.replace(/#.*$/, '');
+    const input = document.createElement('input');
+    input.type = field.type === 'BOOLEAN' ? 'checkbox' : 'text';
+    if (input.type === 'checkbox') input.checked = Boolean(field.value);
+    else input.value = field.value ?? '';
+    fields.set(field.key, input);
+    label.appendChild(input);
+    card.appendChild(label);
+  }
+  const copySection = document.createElement('div');
+  for (const copy of item.copy) {
+    const row = document.createElement('label');
+    row.textContent = copy.title + ' от GigaCode';
+    const draft = document.createElement('input');
+    draft.value = copy.value;
+    row.appendChild(draft);
+    const destination = document.createElement('select');
+    destination.add(new Option('Выберите текстовое свойство', ''));
+    for (const field of item.fields.filter(field => field.type === 'TEXT')) {
+      destination.add(new Option(field.key.replace(/#.*$/, ''), field.key));
+    }
+    destination.value = copy.key || '';
+    row.appendChild(destination);
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.textContent = 'Перенести в свойство';
+    use.onclick = () => {
+      const input = fields.get(destination.value);
+      if (!input) {
+        status('Выберите текстовое свойство для переноса.');
+        return;
+      }
+      input.value = draft.value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    row.appendChild(use);
+    copySection.appendChild(row);
+  }
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = item.fields.some(field => field.type === 'TEXT')
+    ? 'В макет попадут значения из свойств компонента ниже. Сверьте их перед подтверждением.'
+    : 'Этот вариант не открывает текстовых свойств. Выберите другой вариант, чтобы вставить тексты.';
+  copySection.appendChild(hint);
+  card.insertBefore(copySection, state.nextSibling);
+  const confirm = document.createElement('button');
+  confirm.type = 'button';
+  confirm.textContent = confirmed ? 'Компонент подтверждён' : 'Подтвердить компонент';
+  card.appendChild(confirm);
+  card.addEventListener('input', () => {
+    if (!approvals[index]) return;
+    approvals[index] = false;
+    confirm.textContent = 'Подтвердить компонент';
+    post('unconfirmItem', { index });
+    setBusy(false);
+  });
+  variant.onchange = () => {
+    approvals[index] = false;
+    setBusy(true);
+    post('chooseVariant', { index, variant: Number(variant.value) });
+  };
+  confirm.onclick = () => {
+    const values = Object.fromEntries(Array.from(fields, ([key, input]) =>
+      [key, input.type === 'checkbox' ? input.checked : input.value]));
+    setBusy(true);
+    post('confirmItem', { index, variant: Number(variant.value), values });
+  };
+  return card;
+}
+
 window.addEventListener('message', async event => {
   if (event.source && event.source !== parent) return;
   const message = event.data?.pluginMessage;
@@ -275,25 +363,17 @@ window.addEventListener('message', async event => {
       }
       break;
     case 'proposal':
-      proposedCount = message.items.some(item => item.missing.length) ? 0 : message.items.length;
+      approvals = message.items.map(() => false);
       $('revision').value = '';
-      $('items').replaceChildren(...message.items.map(item => {
-        const li = document.createElement('li');
-        li.textContent = [
-          item.name,
-          'Подпись — ' + item.text,
-          item.placeholder ? 'Плейсхолдер — ' + item.placeholder : '',
-          item.value ? 'Моковое значение — ' + item.value : '',
-          item.missing.length ? 'В библиотеке нет доступного свойства: ' + item.missing.join(', ') : ''
-        ].filter(Boolean).join('\n');
-        li.style.whiteSpace = 'pre-wrap';
-        return li;
-      }));
+      $('items').replaceChildren(...message.items.map((item, index) => renderItem(index, item)));
       $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
       $('plan').hidden = false;
-      status(proposedCount ? '' : message.items.length
-        ? 'Замени отмеченный компонент или убери недоступный текст в правках к предложению.'
-        : 'В предложении больше нет компонентов.');
+      status(approvals.length ? 'Проверьте и подтвердите каждый компонент.' : 'В предложении больше нет компонентов.');
+      break;
+    case 'itemConfigured':
+      approvals[message.index] = message.confirmed;
+      $('items').children[message.index].replaceWith(renderItem(message.index, message.item, message.confirmed));
+      status(approvals.every(Boolean) ? 'Все компоненты подтверждены.' : '');
       break;
     case 'applied':
       hasSource = true;

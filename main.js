@@ -20,7 +20,7 @@ let activeLibraryAssets;
 let activeLightboxComponent;
 let busy = false;
 
-pixso.showUI(__html__, { width: 440, height: 680, title: 'Сборка экрана Triplex · Проверка фрейма' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · Проверка фрейма' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -121,7 +121,7 @@ function createStates() {
   send('statesCreated', { count: copies.length, skipped, errorsPending });
 }
 
-async function prepare({ task }) {
+async function prepare({ task, standard }) {
   if (typeof task !== 'string' || !task.trim() || task.length > 3000) {
     throw new Error('Опишите задачу (до 3000 символов).');
   }
@@ -136,7 +136,7 @@ async function prepare({ task }) {
   if (!isFormBody(frame, body)) throw new Error('Фрейм изменился. Запросите компоненты заново.');
   const catalog = formCatalog(activeLibraryAssets || []);
   if (!catalog.length) throw new Error('Pixso не вернул подходящие поля из библиотеки установленного LightBox.');
-  prepared = { frameId: frame.id, bodyId: body.id, catalog, task: task.trim() };
+  prepared = { frameId: frame.id, bodyId: body.id, catalog, task: task.trim(), standard: typeof standard === 'string' ? standard.trim().slice(0, 8000) : flow?.standard };
   sendPlanRequest();
 }
 
@@ -153,7 +153,7 @@ function sendPlanRequest(revision) {
     'Для текстовых полей предложи короткую подсказку по задаче. Используй точный плейсхолдер, если пользователь его указал. Для кнопок и чекбоксов пропусти placeholder.',
     'Если есть revision, отредактируй текущий список по этим правкам и верни весь новый список. Сохрани позиции, которые пользователь не просил менять.',
     JSON.stringify({
-      task, components, revision, requirements: flow?.requirements, textStandard: flow?.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
+      task, components, revision, requirements: flow?.requirements, textStandard: prepared.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
       currentItems: revision ? items.map(({ id, text, placeholder, value }) => ({ id, text, placeholder, value })) : undefined
     })
   ].join('\n');
@@ -195,43 +195,84 @@ async function review(raw) {
   for (const id of new Set(items.map(item => item.id))) {
     const asset = prepared.catalog[id - 1];
     let component;
+    let set;
     try {
-      if (asset.type !== 'COMPONENT_SET') {
-        component = await resolveComponent(asset);
-      } else if (typeof pixso.importComponentSetByKeyAsync === 'function') {
-        component = (await pixso.importComponentSetByKeyAsync(asset.key))?.defaultVariant;
-      } else {
+      if (asset.type === 'COMPONENT_SET' && typeof pixso.importComponentSetByKeyAsync === 'function') {
+        set = await pixso.importComponentSetByKeyAsync(asset.key);
+        component = set?.defaultVariant;
+      } else if (asset.type === 'COMPONENT_SET') {
         const variants = Array.from(asset.variants || []).filter(variant => variant.key);
         if (variants.length !== 1) throw new Error('API Pixso не предоставляет importComponentSetByKeyAsync.');
         component = await resolveComponent(variants[0]);
+      } else {
+        component = await resolveComponent(asset);
+        if (component.parent?.type === 'COMPONENT_SET') set = component.parent;
       }
     } catch (error) {
-      throw new Error('Импорт «' + asset.name + '» (' + asset.type + '): ' + (error.message || String(error)));
+      throw new Error('Импорт «' + asset.name + '»: ' + (error.message || String(error)));
     }
     if (component?.type !== 'COMPONENT') throw new Error('Компонент недоступен: ' + asset.name);
-    const fields = Object.entries(component.componentPropertyDefinitions || {})
-      .filter(([, property]) => property.type === 'TEXT').map(([key]) => key);
-    const placeholderProperty = fields.find(key => /^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i.test(key));
-    const valueProperty = fields.find(key => /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i.test(key));
-    const property = fields.find(key => /^(?:label|caption|title|field[ _-]?label|заголовок|подпись)(?:#|$)/i.test(key)) ||
-      (fields.length === 1 && !placeholderProperty && !valueProperty ? fields[0] : undefined);
-    parts.set(id, { component, property, placeholderProperty, valueProperty, name: asset.name });
+    const variants = [component, ...Array.from(set?.children || []).filter(node =>
+      node.type === 'COMPONENT' && node.id !== component.id)];
+    parts.set(id, { variants, name: asset.name });
   }
-  prepared.items = items.map(item => {
-    const part = parts.get(item.id);
-    const missing = [];
-    if (!part.property) missing.push('подпись');
-    if (item.placeholder && !part.placeholderProperty) missing.push('плейсхолдер');
-    if (item.value && !part.valueProperty) missing.push('моковое значение');
-    return { ...part, ...item, missing };
-  });
-  const target = pixso.getNodeById(prepared.bodyId);
-  send('proposal', {
-    target: target?.name,
-    items: prepared.items.map(({ name, text, placeholder, value, missing }) => ({
-      name, text, placeholder, value, missing
+  prepared.items = items.map(item => ({ ...parts.get(item.id), ...item, variant: 0 }));
+  send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: prepared.items.map(describeItem) });
+}
+
+function editableProperties(component) {
+  return Object.entries({
+    ...(component.parent?.type === 'COMPONENT_SET' ? component.parent.componentPropertyDefinitions : {}),
+    ...component.componentPropertyDefinitions
+  }).filter(([, property]) => property.type === 'TEXT' || property.type === 'BOOLEAN');
+}
+
+function describeItem(item) {
+  const fields = editableProperties(item.variants[item.variant]);
+  const textKeys = fields.filter(([, property]) => property.type === 'TEXT').map(([key]) => key);
+  const overrides = new Map();
+  const copy = [];
+  const put = (title, pattern, value) => {
+    const key = textKeys.find(key => pattern.test(key));
+    if (value != null && value !== '') copy.push({ title, value, key });
+    if (key && value != null) overrides.set(key, value);
+    return Boolean(key);
+  };
+  const label = put('Подпись', /^(?:label|caption|title|field[ _-]?label|заголовок|подпись)(?:#|$)/i, item.text);
+  const placeholder = put('Плейсхолдер', /^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i, item.placeholder);
+  const value = put('Моковое значение', /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i, item.value);
+  return {
+    name: item.name, text: item.text, copy,
+    missing: [!label && 'подпись', item.placeholder && !placeholder && 'плейсхолдер',
+      item.value && !value && 'моковое значение'].filter(Boolean),
+    variant: item.variant, variants: item.variants.map(component => component.name),
+    fields: fields.map(([key, property]) => ({
+      key, type: property.type,
+      value: item.values && Object.hasOwn(item.values, key)
+        ? item.values[key] : overrides.get(key) ?? property.defaultValue
     }))
-  });
+  };
+}
+
+function configureItem({ index, variant, values }, confirm) {
+  const item = prepared?.items?.[index];
+  if (!item || !Number.isInteger(variant) || !item.variants[variant]) throw new Error('Компонент или вариант недоступен.');
+  if (variant !== item.variant) {
+    item.variant = variant;
+    item.values = undefined;
+  }
+  item.confirmed = false;
+  if (confirm) {
+    const fields = new Map(editableProperties(item.variants[variant]));
+    if (!values || Object.entries(values).some(([key, value]) => {
+      const type = fields.get(key)?.type;
+      return type === 'TEXT' ? typeof value !== 'string' || value.length > 3000
+        : type !== 'BOOLEAN' || typeof value !== 'boolean';
+    })) throw new Error('Проверьте свойства компонента.');
+    item.values = values;
+    item.confirmed = true;
+  }
+  send('itemConfigured', { index, item: describeItem(item), confirmed: item.confirmed });
 }
 
 function readLightboxes() {
@@ -386,19 +427,15 @@ async function resolveComponent(binding) {
 }
 
 function insert(parent, item) {
-  const instance = item.component.createInstance();
+  const instance = item.variants[item.variant].createInstance();
   try {
     parent.appendChild(instance);
     const fields = instance.componentProperties || {};
-    const properties = {};
-    for (const [key, value] of [[item.property, item.text], [item.placeholderProperty, item.placeholder], [item.valueProperty, item.value]]) {
-      if (!value) continue;
-      if (!key || fields[key]?.type !== 'TEXT') {
-        throw new Error('Pixso не открыл текстовое свойство для «' + value + '» в компоненте «' + item.name + '».');
-      }
-      properties[key] = value;
+    for (const [key, value] of Object.entries(item.values)) {
+      const type = typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT';
+      if (fields[key]?.type !== type) throw new Error('Недоступно свойство «' + key + '» в «' + item.name + '».');
     }
-    instance.setProperties(properties);
+    if (Object.keys(item.values).length) instance.setProperties(item.values);
     return instance;
   } catch (error) {
     if (!instance.removed) instance.remove();
@@ -409,8 +446,8 @@ function insert(parent, item) {
 async function apply() {
   const context = prepared;
   if (!context?.items?.length) throw new Error('Сначала получите список компонентов.');
-  if (context.items.some(item => item.missing.length)) {
-    throw new Error('В предложении есть тексты, которые нельзя заполнить. Уточните предложение перед вставкой.');
+  if (context.items.some(item => !item.confirmed)) {
+    throw new Error('Подтвердите каждый компонент перед вставкой.');
   }
   const frame = getActiveForm(context.frameId);
   const body = pixso.getNodeById(context.bodyId);
@@ -481,6 +518,13 @@ pixso.ui.onmessage = async message => {
       }
       case 'review':
         await review(message.raw);
+        break;
+      case 'chooseVariant':
+      case 'confirmItem':
+        configureItem(message, message.type === 'confirmItem');
+        break;
+      case 'unconfirmItem':
+        if (prepared?.items?.[message.index]) prepared.items[message.index].confirmed = false;
         break;
       case 'apply':
         await apply();
