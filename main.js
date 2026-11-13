@@ -20,7 +20,7 @@ let activeLibraryAssets;
 let activeLightboxComponent;
 let busy = false;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.3' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.4' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -310,7 +310,7 @@ function describeItem(item, suggest = false, showAllFields = false) {
   };
 }
 
-async function configureItem({ index, variant, values, error, fillKeys }, confirm) {
+async function configureItem({ index, variant, values, error, fillKeys }, confirm, editProperties = false) {
   if (!['properties', 'copy'].includes(prepared?.stage)) throw new Error('Сначала согласуйте набор.');
   const item = prepared?.items?.[index];
   if (!item || index !== prepared.index || !Number.isInteger(variant) || !item.variants[variant]) throw new Error('Компонент или вариант недоступен.');
@@ -332,10 +332,16 @@ async function configureItem({ index, variant, values, error, fillKeys }, confir
         throw new Error('Проверьте выбранные текстовые свойства.');
       }
       item.fillKeys = fillKeys;
+      item.values = Object.fromEntries(Object.entries(item.values || {}).filter(([key]) =>
+        fields.get(key)?.type !== 'TEXT' || fillKeys.includes(key)));
     }
     item.values = { ...item.values, ...values };
     if (prepared.stage === 'copy' && typeof error === 'string') item.error = error.trim().slice(0, 3000);
     item.confirmed = confirm;
+  }
+  if (editProperties) {
+    await showProperties();
+    return;
   }
   if (confirm && prepared.stage === 'properties') {
     requestCopy();
@@ -634,6 +640,10 @@ pixso.ui.onmessage = async message => {
         break;
       case 'reviewCopy':
         await reviewCopy(message.raw);
+        break;
+      case 'editProperties':
+        if (prepared?.stage !== 'copy') throw new Error('Сначала откройте согласование текстов.');
+        await configureItem(message, false, true);
         break;
       case 'chooseVariant':
       case 'previewItem':
