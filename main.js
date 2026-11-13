@@ -20,7 +20,7 @@ let activeLibraryAssets;
 let activeLightboxComponent;
 let busy = false;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.5' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.6' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -273,12 +273,20 @@ async function reviewCopy(raw) {
   send('copyOpened', { index, total: items.length, item: preview, reply: entry.reply });
 }
 
+const instanceLabels = new WeakMap();
+
 function editableProperties(component) {
   const properties = Object.entries({
     ...(component.parent?.type === 'COMPONENT_SET' ? component.parent.componentPropertyDefinitions : {}),
     ...component.componentPropertyDefinitions
   }).filter(([, property]) => property.type === 'TEXT' || property.type === 'BOOLEAN');
   if (properties.some(([key, property]) => property.type === 'TEXT' && isLabel(key))) return properties;
+  const label = instanceLabels.get(component);
+  if (label) properties.push(label);
+  return properties;
+}
+
+function findInstanceLabel(instance) {
   const labels = [];
   function visit(node, path) {
     if (node.visible === false) return;
@@ -287,9 +295,8 @@ function editableProperties(component) {
     }
     Array.from(node.children || []).forEach((child, index) => visit(child, [...path, index]));
   }
-  Array.from(component.children || []).forEach((child, index) => visit(child, [index]));
-  if (labels.length === 1) properties.push(labels[0]);
-  return properties;
+  Array.from(instance.children || []).forEach((child, index) => visit(child, [index]));
+  return labels.length === 1 ? labels[0] : undefined;
 }
 
 function isLabel(name) {
@@ -561,10 +568,13 @@ async function setInstanceValues(instance, values, name) {
 }
 
 async function previewItem(item, suggest, showAllFields = false) {
-  const description = describeItem(item, suggest, showAllFields);
+  const component = item.variants[item.variant];
+  let description;
   let instance;
   try {
-    instance = item.variants[item.variant].createInstance();
+    instance = component.createInstance();
+    instanceLabels.set(component, findInstanceLabel(instance));
+    description = describeItem(item, suggest, showAllFields);
     instance.x = pixso.viewport.center.x + 100000;
     instance.y = pixso.viewport.center.y;
     const values = Object.fromEntries(description.fields.filter(field => field.value != null)
@@ -574,7 +584,7 @@ async function previewItem(item, suggest, showAllFields = false) {
     const png = await instance.exportAsync({ format: 'PNG' });
     return { ...description, png: Array.from(png) };
   } catch (error) {
-    return { ...description, previewError: error.message || String(error) };
+    return { ...(description || describeItem(item, suggest, showAllFields)), previewError: error.message || String(error) };
   } finally {
     if (instance && !instance.removed) instance.remove();
   }
