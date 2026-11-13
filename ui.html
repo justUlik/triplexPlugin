@@ -65,14 +65,18 @@
 <button id="createStates" type="button" hidden>Утвердить экран и создать состояния</button>
 <p id="status" role="status" aria-live="polite">Интерфейс загружается…</p>
 <section id="plan" hidden>
-  <h2>Компоненты и тексты для утверждения</h2>
+  <h2 id="planTitle">1. Согласуйте набор компонентов</h2>
   <p id="target" class="hint"></p>
   <ol id="items"></ol>
+  <div id="listActions">
   <label>Что изменить в предложении
     <textarea id="revision" maxlength="3000" placeholder="Убери телефон. Вместо поля «Тип» поставь список."></textarea>
   </label>
   <button id="revise" type="button">Обновить предложение</button>
-  <button id="apply" class="primary" type="button">Вставить подтверждённые компоненты</button>
+  <button id="openProperties" type="button">Согласовать набор</button>
+  </div>
+  <button id="requestCopy" type="button" hidden>Согласовать свойства и предложить тексты</button>
+  <button id="apply" hidden class="primary" type="button">Вставить подтверждённые компоненты</button>
 </section>
 
 <script>
@@ -80,6 +84,7 @@ const $ = id => document.getElementById(id);
 let busy = false;
 let formPlaced = false;
 let approvals = [];
+let stage = 'list';
 let flowApproved = false;
 let hasFlowDraft = false;
 let hasSource = false;
@@ -108,6 +113,11 @@ function setBusy(value) {
   $('approveFlow').disabled = value;
   $('createStates').hidden = !hasSource || !flowApproved;
   $('items').querySelectorAll('input, select, button').forEach(control => { control.disabled = value; });
+  $('openProperties').disabled = value || !approvals.length;
+  $('listActions').hidden = stage !== 'list';
+  $('requestCopy').hidden = stage !== 'properties';
+  $('requestCopy').disabled = value || !approvals.length || !approvals.every(Boolean);
+  $('apply').hidden = stage !== 'copy';
   $('apply').disabled = value || !approvals.length || !approvals.every(Boolean);
   $('place').disabled = value || !selectedSize();
   $('prepare').disabled = $('task').disabled = value || !formPlaced;
@@ -238,6 +248,17 @@ async function requestModel(prompt) {
   return data.result;
 }
 
+$('openProperties').onclick = () => {
+  setBusy(true);
+  status('Готовлю превью…');
+  post('openProperties');
+};
+$('requestCopy').onclick = () => {
+  setBusy(true);
+  status('GigaCode готовит тексты и ошибки…');
+  post('requestCopy');
+};
+
 function renderItem(index, item, confirmed = false) {
   const card = document.createElement('li');
   const heading = document.createElement('strong');
@@ -261,10 +282,12 @@ function renderItem(index, item, confirmed = false) {
   const state = document.createElement('label');
   state.textContent = 'Базовый вариант';
   state.appendChild(variant);
+  state.hidden = stage === 'copy';
   card.appendChild(state);
   const fields = new Map();
   for (const field of item.fields) {
     const label = document.createElement('label');
+    label.hidden = stage === 'properties' ? field.type === 'TEXT' : field.type === 'BOOLEAN';
     label.textContent = field.key.replace(/#.*$/, '');
     const input = document.createElement('input');
     input.type = field.type === 'BOOLEAN' ? 'checkbox' : 'text';
@@ -309,7 +332,15 @@ function renderItem(index, item, confirmed = false) {
     ? 'В макет попадут значения из свойств компонента ниже. Сверьте их перед подтверждением.'
     : 'Этот вариант не открывает текстовых свойств. Выберите другой вариант, чтобы вставить тексты.';
   copySection.appendChild(hint);
+  copySection.hidden = stage !== 'copy';
   card.insertBefore(copySection, state.nextSibling);
+  const error = document.createElement('input');
+  error.value = item.error || '';
+  const errorLabel = document.createElement('label');
+  errorLabel.textContent = 'Текст ошибки поля';
+  errorLabel.hidden = stage !== 'copy';
+  errorLabel.appendChild(error);
+  card.appendChild(errorLabel);
   const confirm = document.createElement('button');
   confirm.type = 'button';
   confirm.textContent = confirmed ? 'Компонент подтверждён' : 'Подтвердить компонент';
@@ -335,7 +366,7 @@ function renderItem(index, item, confirmed = false) {
     const values = Object.fromEntries(Array.from(fields, ([key, input]) =>
       [key, input.type === 'checkbox' ? input.checked : input.value]));
     setBusy(true);
-    post(type, { index, variant: Number(variant.value), values });
+    post(type, { index, variant: Number(variant.value), values, error: error.value });
   };
   refresh.onclick = () => sendValues('previewItem');
   confirm.onclick = () => sendValues('confirmItem');
@@ -383,12 +414,34 @@ window.addEventListener('message', async event => {
       }
       break;
     case 'proposal':
+      stage = 'list';
       approvals = message.items.map(() => false);
+      $('planTitle').textContent = '1. Согласуйте набор компонентов';
       $('revision').value = '';
-      $('items').replaceChildren(...message.items.map((item, index) => renderItem(index, item)));
+      $('items').replaceChildren(...message.items.map(item => {
+        const row = document.createElement('li');
+        row.textContent = item.text + ' · ' + item.name;
+        return row;
+      }));
       $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
       $('plan').hidden = false;
-      status(approvals.length ? 'Проверьте и подтвердите каждый компонент.' : 'В предложении больше нет компонентов.');
+      status(message.items.length ? '' : 'В предложении больше нет компонентов.');
+      break;
+    case 'copyRequest':
+      try {
+        post('reviewCopy', { raw: await requestModel(message.prompt) });
+        return;
+      } catch (error) {
+        status(error.message, true);
+      }
+      break;
+    case 'propertiesOpened':
+    case 'copyOpened':
+      stage = message.type === 'copyOpened' ? 'copy' : 'properties';
+      $('planTitle').textContent = stage === 'copy' ? '3. Согласуйте тексты, моки и ошибки' : '2. Согласуйте варианты и свойства';
+      approvals = message.items.map(() => false);
+      $('items').replaceChildren(...message.items.map((item, index) => renderItem(index, item)));
+      status('Проверьте и подтвердите каждую карточку.');
       break;
     case 'itemConfigured':
       approvals[message.index] = message.confirmed;
