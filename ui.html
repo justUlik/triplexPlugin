@@ -19,6 +19,7 @@
   button:disabled { opacity: .55; cursor: default; }
   details { margin: 12px 0; padding: 10px 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
   summary { font-weight: 600; cursor: pointer; }
+  #items img { display: block; max-width: 100%; max-height: 300px; object-fit: contain; margin: 12px 0; }
   #items > li { padding: 12px; margin-bottom: 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
   #items input[type="checkbox"] { display: inline-block; width: auto; margin-left: 8px; }
   #status { min-height: 20px; line-height: 1.4; }
@@ -242,6 +243,18 @@ function renderItem(index, item, confirmed = false) {
   const heading = document.createElement('strong');
   heading.textContent = item.text + ' · ' + item.name;
   card.appendChild(heading);
+  const actions = document.createElement('p');
+  card.appendChild(actions);
+  if (item.png?.length) {
+    const image = document.createElement('img');
+    image.alt = 'Превью ' + item.name;
+    image.src = 'data:image/png;base64,' + btoa(item.png.map(byte => String.fromCharCode(byte)).join(''));
+    card.appendChild(image);
+  } else {
+    const note = document.createElement('p');
+    note.textContent = 'Превью недоступно' + (item.previewError ? ' — ' + item.previewError : '');
+    card.appendChild(note);
+  }
   const variant = document.createElement('select');
   item.variants.forEach((name, i) => variant.add(new Option(name, i)));
   variant.value = item.variant;
@@ -300,8 +313,13 @@ function renderItem(index, item, confirmed = false) {
   const confirm = document.createElement('button');
   confirm.type = 'button';
   confirm.textContent = confirmed ? 'Компонент подтверждён' : 'Подтвердить компонент';
-  card.appendChild(confirm);
+  actions.appendChild(confirm);
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.textContent = 'Обновить превью';
+  actions.appendChild(refresh);
   card.addEventListener('input', () => {
+    refresh.textContent = 'Обновить превью · есть правки';
     if (!approvals[index]) return;
     approvals[index] = false;
     confirm.textContent = 'Подтвердить компонент';
@@ -313,12 +331,14 @@ function renderItem(index, item, confirmed = false) {
     setBusy(true);
     post('chooseVariant', { index, variant: Number(variant.value) });
   };
-  confirm.onclick = () => {
+  const sendValues = type => {
     const values = Object.fromEntries(Array.from(fields, ([key, input]) =>
       [key, input.type === 'checkbox' ? input.checked : input.value]));
     setBusy(true);
-    post('confirmItem', { index, variant: Number(variant.value), values });
+    post(type, { index, variant: Number(variant.value), values });
   };
+  refresh.onclick = () => sendValues('previewItem');
+  confirm.onclick = () => sendValues('confirmItem');
   return card;
 }
 

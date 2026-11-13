@@ -217,7 +217,9 @@ async function review(raw) {
     parts.set(id, { variants, name: asset.name });
   }
   prepared.items = items.map(item => ({ ...parts.get(item.id), ...item, variant: 0 }));
-  send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: prepared.items.map(describeItem) });
+  const previews = [];
+  for (const item of prepared.items) previews.push(await previewItem(item));
+  send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews });
 }
 
 function editableProperties(component) {
@@ -254,7 +256,7 @@ function describeItem(item) {
   };
 }
 
-function configureItem({ index, variant, values }, confirm) {
+async function configureItem({ index, variant, values }, confirm) {
   const item = prepared?.items?.[index];
   if (!item || !Number.isInteger(variant) || !item.variants[variant]) throw new Error('Компонент или вариант недоступен.');
   if (variant !== item.variant) {
@@ -262,7 +264,7 @@ function configureItem({ index, variant, values }, confirm) {
     item.values = undefined;
   }
   item.confirmed = false;
-  if (confirm) {
+  if (confirm || values) {
     const fields = new Map(editableProperties(item.variants[variant]));
     if (!values || Object.entries(values).some(([key, value]) => {
       const type = fields.get(key)?.type;
@@ -270,9 +272,9 @@ function configureItem({ index, variant, values }, confirm) {
         : type !== 'BOOLEAN' || typeof value !== 'boolean';
     })) throw new Error('Проверьте свойства компонента.');
     item.values = values;
-    item.confirmed = true;
+    item.confirmed = confirm;
   }
-  send('itemConfigured', { index, item: describeItem(item), confirmed: item.confirmed });
+  send('itemConfigured', { index, item: await previewItem(item), confirmed: item.confirmed });
 }
 
 function readLightboxes() {
@@ -426,16 +428,39 @@ async function resolveComponent(binding) {
   return component;
 }
 
+function setInstanceValues(instance, values, name) {
+  const fields = instance.componentProperties || {};
+  for (const [key, value] of Object.entries(values)) {
+    const type = typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT';
+    if (fields[key]?.type !== type) throw new Error('Недоступно свойство «' + key + '» в «' + name + '».');
+  }
+  if (Object.keys(values).length) instance.setProperties(values);
+}
+
+async function previewItem(item) {
+  const description = describeItem(item);
+  let instance;
+  try {
+    instance = item.variants[item.variant].createInstance();
+    instance.x = pixso.viewport.center.x + 100000;
+    instance.y = pixso.viewport.center.y;
+    const values = Object.fromEntries(description.fields.filter(field => field.value != null)
+      .map(field => [field.key, field.value]));
+    setInstanceValues(instance, values, item.name);
+    const png = await instance.exportAsync({ format: 'PNG' });
+    return { ...description, png: Array.from(png) };
+  } catch (error) {
+    return { ...description, previewError: error.message || String(error) };
+  } finally {
+    if (instance && !instance.removed) instance.remove();
+  }
+}
+
 function insert(parent, item) {
   const instance = item.variants[item.variant].createInstance();
   try {
     parent.appendChild(instance);
-    const fields = instance.componentProperties || {};
-    for (const [key, value] of Object.entries(item.values)) {
-      const type = typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT';
-      if (fields[key]?.type !== type) throw new Error('Недоступно свойство «' + key + '» в «' + item.name + '».');
-    }
-    if (Object.keys(item.values).length) instance.setProperties(item.values);
+    setInstanceValues(instance, item.values, item.name);
     return instance;
   } catch (error) {
     if (!instance.removed) instance.remove();
@@ -520,8 +545,9 @@ pixso.ui.onmessage = async message => {
         await review(message.raw);
         break;
       case 'chooseVariant':
+      case 'previewItem':
       case 'confirmItem':
-        configureItem(message, message.type === 'confirmItem');
+        await configureItem(message, message.type === 'confirmItem');
         break;
       case 'unconfirmItem':
         if (prepared?.items?.[message.index]) prepared.items[message.index].confirmed = false;
