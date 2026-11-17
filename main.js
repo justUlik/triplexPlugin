@@ -21,7 +21,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.7' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.8' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -258,6 +258,7 @@ function requestConversation({ revision }) {
     'На этапе list правки подписей, подсказок, значений, readOnly и ошибок передавай в updates через text, placeholder, value, readOnly, error. На остальных этапах используй values и variant.',
     'updates содержит только изменяемые поля. values использует точные ключи fields. variant — индекс из variants. Не выдумывай ключи и варианты.',
     'list — изменение состава или порядка. items — весь новый порядок: {"uid":1} сохраняет существующий компонент со всеми настройками, {"id":1,"text":"Подпись","placeholder":"","value":"","readOnly":false} добавляет из каталога.',
+    'uid — уникальный номер уже добавленного поля из components. catalogId/id — тип из каталога. Несколько Text Field могут иметь один catalogId, но разные uid. Копируй uid из components, не используй порядковый номер или catalogId вместо него. Каждый uid в items встречается один раз. Для нового поля передавай только id без uid.',
     'При list можно также передать updates для существующих компонентов. Сохраняй все незатронутые решения. Если выполнить просьбу по доступным свойствам нельзя, объясни это в reply.',
     'Для кошелька учитывай имя, ID и баланс. Не придумывай бизнес-правила. Условия ошибок записывай отдельными строками «условие — сообщение».',
     JSON.stringify({ conversation, task: prepared.task, standard: prepared.standard, stage: prepared.stage, components, variantsByCatalogId: definitions,
@@ -273,7 +274,30 @@ async function reviewConversation(raw) {
   const context = prepared;
   const existing = new Map(context.items.map(item => [item.uid, item]));
   const updated = new Map(existing);
-  for (const change of response.updates || []) {
+  const normalizeUid = value => typeof value === 'string' && /^\d+$/.test(value.trim())
+    ? Number(value.trim()) : value;
+  if (response.updates !== undefined && !Array.isArray(response.updates)) throw new Error('Некорректный список изменений. Повторите отправку.');
+  const changes = (response.updates || []).map(change => {
+    if (!change || typeof change !== 'object') throw new Error('Некорректное изменение компонента.');
+    return { ...change, uid: normalizeUid(change.uid) };
+  });
+  if (response.action === 'list') {
+    if (!Array.isArray(response.items) || response.items.length > 12) throw new Error('Некорректный список.');
+    response.items = response.items.map(item => {
+      if (!item || typeof item !== 'object') throw new Error('Некорректная строка списка компонентов.');
+      return item.uid === undefined ? item : { ...item, uid: normalizeUid(item.uid) };
+    });
+    const seen = new Set();
+    for (const item of response.items.filter(item => item.uid !== undefined)) {
+      if (!existing.has(item.uid)) throw new Error('GigaChat указал неизвестное поле uid=' + String(item.uid) +
+        '. Доступные поля: ' + [...existing.values()].map(field => field.uid + ' («' + field.text + '»)').join(', ') +
+        '. Нажмите «Повторить отправку».');
+      if (seen.has(item.uid)) throw new Error('GigaChat дважды включил поле «' + existing.get(item.uid).text +
+        '» (uid=' + item.uid + '). Для второго поля нужна новая запись из каталога. Нажмите «Повторить отправку».');
+      seen.add(item.uid);
+    }
+  }
+  for (const change of changes) {
     const current = existing.get(change.uid);
     if (!current) throw new Error('Ответ ссылается на неизвестный компонент.');
     let variant = change.variant ?? current.variant;
@@ -314,8 +338,6 @@ async function reviewConversation(raw) {
   let nextItems = context.items.map(item => updated.get(item.uid));
   if (response.action === 'list') {
     if (!Array.isArray(response.items) || response.items.length > 12) throw new Error('Некорректный список.');
-    const references = response.items.filter(item => item.uid !== undefined).map(item => item.uid);
-    if (new Set(references).size !== references.length || references.some(uid => !updated.has(uid))) throw new Error('Некорректные ссылки на компоненты.');
     const additions = response.items.filter(item => item.uid === undefined);
     let imported = [];
     if (additions.length) {
