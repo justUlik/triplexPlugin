@@ -21,7 +21,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.5' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.6' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -227,25 +227,40 @@ async function review(raw) {
   });
   prepared.stage = "list";
   const previews = prepared.items.map(item => describeItem(item));
-  conversation.push({ role: 'assistant', text: plan.reply || '', components: items });
+  conversation.push({ role: 'assistant', text: plan.reply || '' });
   if (!prepared.importOnly) send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: plan.reply });
 }
 
 function requestConversation({ revision }) {
   if (!prepared?.items || typeof revision !== 'string' || !revision.trim()) throw new Error('Введите сообщение.');
   conversation.push({ role: 'user', text: revision.trim() });
-  const components = prepared.items.map(item => ({
-    uid: item.uid, catalogId: item.id, ...describeItem(item), values: item.values, confirmed: item.confirmed
-  }));
+  const configuring = prepared.stage !== 'list';
+  const definitions = {};
+  const components = prepared.items.map(item => {
+    const result = {
+      uid: item.uid, catalogId: item.id, text: item.text, placeholder: item.placeholder,
+      value: item.value, readOnly: item.readOnly, error: item.error,
+      optionExample: item.optionExample, confirmed: item.confirmed
+    };
+    if (configuring) {
+      const description = describeItem(item);
+      result.variant = item.variant;
+      result.fields = description.fields;
+      result.values = item.values;
+      definitions[item.id] = description.variants;
+    }
+    return result;
+  });
   send('dialogRequest', { prompt: [
     'Ты согласуешь форму с пользователем. Учитывай всю историю и текущие настройки. Последняя просьба уточняет предыдущие.',
     'Ответь JSON: {"reply":"ответ пользователю","action":"reply|configure|list","updates":[{"uid":1,"variant":0,"values":{},"error":""}],"items":[{"uid":1}]}',
     'reply — вопрос или объяснение без изменений. configure — изменения свойств, текстов, ошибок любого существующего компонента.',
+    'На этапе list правки подписей, подсказок, значений, readOnly и ошибок передавай в updates через text, placeholder, value, readOnly, error. На остальных этапах используй values и variant.',
     'updates содержит только изменяемые поля. values использует точные ключи fields. variant — индекс из variants. Не выдумывай ключи и варианты.',
     'list — изменение состава или порядка. items — весь новый порядок: {"uid":1} сохраняет существующий компонент со всеми настройками, {"id":1,"text":"Подпись","placeholder":"","value":"","readOnly":false} добавляет из каталога.',
     'При list можно также передать updates для существующих компонентов. Сохраняй все незатронутые решения. Если выполнить просьбу по доступным свойствам нельзя, объясни это в reply.',
     'Для кошелька учитывай имя, ID и баланс. Не придумывай бизнес-правила. Условия ошибок записывай отдельными строками «условие — сообщение».',
-    JSON.stringify({ conversation, task: prepared.task, standard: prepared.standard, components,
+    JSON.stringify({ conversation, task: prepared.task, standard: prepared.standard, stage: prepared.stage, components, variantsByCatalogId: definitions,
       catalog: prepared.catalog.map((item, index) => ({ id: index + 1, name: item.name, use: item.use })) })
   ].join('\n') });
 }
@@ -261,9 +276,22 @@ async function reviewConversation(raw) {
   for (const change of response.updates || []) {
     const current = existing.get(change.uid);
     if (!current) throw new Error('Ответ ссылается на неизвестный компонент.');
-    const variant = change.variant ?? current.variant;
+    let variant = change.variant ?? current.variant;
+    if (change.readOnly === true) {
+      const match = current.variants.findIndex(component => isReadOnly(component.name));
+      if (match >= 0) variant = match;
+    }
     if (!Number.isInteger(variant) || !current.variants[variant]) throw new Error('Недоступный вариант.');
     const candidate = { ...current, variant, confirmed: false };
+    for (const key of ['text', 'placeholder', 'value', 'optionExample']) {
+      if (change[key] === undefined) continue;
+      if (typeof change[key] !== 'string' || change[key].length > 3000) throw new Error('Некорректный текст компонента.');
+      candidate[key] = change[key];
+    }
+    if (change.readOnly !== undefined) {
+      if (typeof change.readOnly !== 'boolean') throw new Error('Некорректный режим read-only.');
+      candidate.readOnly = change.readOnly;
+    }
     if (variant !== current.variant) {
       const instance = candidate.variants[variant].createInstance();
       try { instanceLabels.set(candidate.variants[variant], findInstanceLabel(instance)); }
@@ -304,7 +332,7 @@ async function reviewConversation(raw) {
     nextItems = response.items.map(item => item.uid === undefined ? imported.shift() : updated.get(item.uid));
   }
   context.items = nextItems;
-  conversation.push({ role: 'assistant', text: response.reply, changes: response });
+  conversation.push({ role: 'assistant', text: response.reply });
   if (response.action === 'list' || context.stage === 'list') {
     context.stage = 'list';
     send('proposal', { items: nextItems.map(item => describeItem(item)), reply: response.reply });

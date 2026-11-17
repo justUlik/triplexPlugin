@@ -39,7 +39,7 @@ function readCliAnswer(stdout) {
   if (output?.is_error || output?.error) throw new Error('CLI сообщил об ошибке.');
   const answer = output?.result ?? output?.response ?? output;
   if (typeof answer === 'string' && answer.trim()) return answer;
-  if (Array.isArray(answer?.items) || Array.isArray(answer?.states) || typeof answer?.reason === 'string') return JSON.stringify(answer);
+  if (['reply', 'configure', 'list'].includes(answer?.action) || Array.isArray(answer?.items) || Array.isArray(answer?.states) || typeof answer?.reason === 'string') return JSON.stringify(answer);
   const fields = Object.keys(output || {}).slice(0, 8).join(', ');
   throw new Error('Неожиданные поля ответа CLI: ' + (fields || 'нет') + '.');
 }
@@ -113,7 +113,14 @@ const server = createServer(async (request, response) => {
       chunks.push(chunk);
     }
     ({ prompt } = JSON.parse(Buffer.concat(chunks).toString('utf8')));
-    if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 48000) throw new Error();
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      reply(response, 400, { error: 'Запрос должен содержать непустой текст prompt.' });
+      return;
+    }
+    if (prompt.length > 48000) {
+      reply(response, 413, { error: 'Контекст диалога слишком большой: ' + prompt.length + ' символов при лимите 48000. Запрос не отправлен в GigaCode.' });
+      return;
+    }
   } catch {
     reply(response, 400, { error: 'Некорректный запрос.' });
     return;
