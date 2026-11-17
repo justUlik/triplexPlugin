@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.6</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.7</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -430,7 +430,7 @@ function renderItem(index, item) {
       const hint = document.createElement('p');
       hint.className = 'hint';
       hint.textContent = 'Впишите подходящие предложения из чата прямо в свойства компонента.';
-      card.insertBefore(hint, state.nextSibling);
+      card.insertBefore(hint, settings);
     }
   }
   const errors = document.createElement('fieldset');
@@ -517,6 +517,7 @@ window.addEventListener('message', async event => {
   if (event.source && event.source !== parent) return;
   const message = event.data?.pluginMessage;
   if (!message) return;
+  try {
   switch (message.type) {
     case 'flowRequest':
       try {
@@ -658,6 +659,15 @@ window.addEventListener('message', async event => {
     pendingMessage = null;
   }
   setBusy(false);
+  } catch (error) {
+    clearTimeout(imageTimer);
+    if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
+    activePreviewId = undefined;
+    const detail = 'Ошибка отображения (' + message.type + '): ' + (error.message || String(error));
+    status(detail, true);
+    finishPending(detail);
+    setBusy(false);
+  }
 });
 
 setBusy(false);
