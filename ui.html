@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.2</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.3</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -91,6 +91,8 @@ let pendingMessage;
 let readDraft;
 let previewTimer;
 let replacePreview;
+let imageTimer;
+let activePreviewId;
 let formPlaced = false;
 let componentCount = 0;
 let stage = 'list';
@@ -151,6 +153,9 @@ function resetPlan() {
   readDraft = undefined;
   pendingMessage = undefined;
   clearTimeout(previewTimer);
+  clearTimeout(imageTimer);
+  if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
+  activePreviewId = undefined;
   $('componentChat').replaceChildren();
 }
 
@@ -325,6 +330,8 @@ function renderItem(index, item) {
   const preview = document.createElement('div');
   card.appendChild(preview);
   replacePreview = result => {
+    clearTimeout(imageTimer);
+    activePreviewId = result.pending ? result.previewId : undefined;
     preview.replaceChildren();
     if (result.png?.length) {
       const image = document.createElement('img');
@@ -333,11 +340,15 @@ function renderItem(index, item) {
       preview.appendChild(image);
     } else {
       const note = document.createElement('p');
-      note.textContent = 'Превью недоступно' + (result.previewError ? ' — ' + result.previewError : '');
+      note.textContent = result.pending ? 'Готовлю превью…' : 'Превью недоступно' + (result.previewError ? ' — ' + result.previewError : '');
       preview.appendChild(note);
+      if (result.pending) imageTimer = setTimeout(() => {
+        post('cancelPreview', { previewId: result.previewId });
+        replacePreview({ previewError: 'Pixso не подготовил изображение вовремя. Можно продолжить редактирование или обновить превью.' });
+      }, 12000);
     }
   };
-  replacePreview(item);
+  replacePreview({ ...item, pending: Boolean(item.previewId) });
   if (item.optionExample) {
     const example = document.createElement('p');
     example.className = 'hint';
@@ -541,13 +552,19 @@ window.addEventListener('message', async event => {
       status('');
       break;
     case 'itemPreview':
-      if (stage === 'copy' && !busy) replacePreview?.(message.item);
+      if (stage === 'copy') replacePreview?.({ ...message.item, pending: Boolean(message.item.previewId) });
+      return;
+    case 'previewRendered':
+      if (stage === 'copy' && activePreviewId === message.item.previewId) replacePreview?.(message.item);
       return;
     case 'itemConfigured':
       $('items').replaceChildren(renderItem(message.index, message.item));
       status('');
       break;
     case 'readyToApply':
+      clearTimeout(imageTimer);
+      if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
+      activePreviewId = undefined;
       stage = 'ready';
       $('items').replaceChildren();
       $('planTitle').textContent = 'Компоненты согласованы';

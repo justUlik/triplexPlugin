@@ -19,7 +19,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.2' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.3' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -240,7 +240,7 @@ async function openProperties() {
 async function openCurrentComponent() {
   prepared.stage = 'copy';
   const { index, items } = prepared;
-  send('componentOpened', { index, total: items.length, item: await previewItem(items[index], false, true) });
+  publishPreview('componentOpened', items[index], { index, total: items.length });
 }
 
 function requestCopy(revision = '') {
@@ -273,12 +273,11 @@ async function reviewCopy(raw) {
     describeItem(current).fields.some(field => field.key === key && field.type === 'TEXT') && typeof value === 'string' && value.length <= 3000));
   const item = { ...current, texts, text: entry.text, placeholder: entry.placeholder, value: entry.value,
     error: entry.error || '', confirmed: false };
-  const preview = await previewItem(item, true);
+  const preview = publishPreview('copyOpened', item, { index, total: items.length, reply: entry.reply }, true);
   item.values = { ...current.values, ...Object.fromEntries(preview.fields
     .filter(field => field.type === 'TEXT' && field.value != null).map(field => [field.key, field.value])) };
   items[index] = item;
   prepared.stage = 'copy';
-  send('copyOpened', { index, total: items.length, item: preview, reply: entry.reply });
 }
 
 const instanceLabels = new WeakMap();
@@ -379,7 +378,7 @@ async function configureItem({ index, variant, values, error, live }, confirm, r
     }
     return;
   }
-  if (render) send(live ? 'itemPreview' : 'itemConfigured', { index, item: await previewItem(item, false, prepared.stage === 'properties'), confirmed: item.confirmed });
+  if (render) publishPreview(live ? 'itemPreview' : 'itemConfigured', item, { index });
 }
 
 function readLightboxes() {
@@ -565,26 +564,54 @@ async function setInstanceValues(instance, values, name) {
   }
 }
 
-async function previewItem(item, suggest, showAllFields = false) {
+let previewSequence = 0;
+let activePreview;
+
+function publishPreview(type, item, message, suggest = false) {
+  activePreview?.cancel();
+  activePreview = undefined;
   const component = item.variants[item.variant];
-  let description;
   let instance;
+  let description;
   try {
     instance = component.createInstance();
-    instanceLabels.set(component, findInstanceLabel(instance));
-    description = describeItem(item, suggest, showAllFields);
     instance.x = pixso.viewport.center.x + 100000;
     instance.y = pixso.viewport.center.y;
-    const values = Object.fromEntries(description.fields.filter(field => field.value != null)
-      .map(field => [field.key, field.value]));
-    await setInstanceValues(instance, values, item.name);
-    if (typeof instance.exportAsync !== 'function') throw new Error('Pixso не поддерживает экспорт экземпляра через exportAsync.');
-    const png = await instance.exportAsync({ format: 'PNG' });
-    return { ...description, png: Array.from(png) };
+    instanceLabels.set(component, findInstanceLabel(instance));
+    description = describeItem(item, suggest);
   } catch (error) {
-    return { ...(description || describeItem(item, suggest, showAllFields)), previewError: error.message || String(error) };
-  } finally {
     if (instance && !instance.removed) instance.remove();
+    description = { ...describeItem(item, suggest), previewError: error.message || String(error) };
+    send(type, { ...message, item: description });
+    return description;
+  }
+  const previewId = ++previewSequence;
+  let cancelled = false;
+  activePreview = { previewId, cancel() {
+    cancelled = true;
+    if (!instance.removed) instance.remove();
+  } };
+  send(type, { ...message, item: { ...description, previewId } });
+  renderPreview();
+  return description;
+
+  async function renderPreview() {
+    let result;
+    try {
+      const values = Object.fromEntries(description.fields.filter(field => field.value != null)
+        .map(field => [field.key, field.value]));
+      await setInstanceValues(instance, values, item.name);
+      if (cancelled) return;
+      if (typeof instance.exportAsync !== 'function') throw new Error('Pixso не поддерживает экспорт экземпляра через exportAsync.');
+      const png = await instance.exportAsync({ format: 'PNG' });
+      result = { png: Array.from(png) };
+    } catch (error) {
+      result = { previewError: error.message || String(error) };
+    } finally {
+      if (!instance.removed) instance.remove();
+      if (activePreview?.previewId === previewId) activePreview = undefined;
+    }
+    if (!cancelled) send('previewRendered', { item: { name: description.name, ...result, previewId } });
   }
 }
 
@@ -689,6 +716,12 @@ async function handleMessage(message) {
         break;
       case 'reviewCopy':
         await reviewCopy(message.raw);
+        break;
+      case 'cancelPreview':
+        if (activePreview?.previewId === message.previewId) {
+          activePreview.cancel();
+          activePreview = undefined;
+        }
         break;
       case 'chooseVariant':
       case 'previewItem':
