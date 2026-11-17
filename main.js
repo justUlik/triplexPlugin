@@ -18,9 +18,8 @@ let flowApproved = false;
 let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
-let busy = false;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 13.11.6' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.1' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -146,15 +145,17 @@ function sendPlanRequest(revision) {
   const prompt = [
     'Предложи поля для формы из доступных компонентов Triplex.',
     'Используй только числовые ID из каталога. Верни до 12 элементов в порядке вставки.',
-    'Ответь только JSON: {"reply":"Пояснение или вопрос","items":[{"id":1,"text":"Подпись поля","placeholder":"Например, ООО Ромашка","value":"ООО Ромашка"}]}.',
+    'Ответь только JSON: {"reply":"Пояснение или вопрос","items":[{"id":1,"text":"Подпись поля","placeholder":"Например, ООО Ромашка","value":"ООО Ромашка","readOnly":false,"error":"Условие — сообщение","optionExample":""}]}.',
     'Подписи на русском, до 120 символов в одну строку. Если подходящих компонентов нет, верни {"reason":"причина"}.',
     'Следуй textStandard для всех подписей и подсказок. Сохраняй термины бизнес-требований.',
     'Для заполняемых полей предложи вымышленное значение value по задаче. Плейсхолдер и значение — разные свойства. Если нужен пустой экран или компонент не принимает текстовое значение, пропусти value.',
     'Для текстовых полей предложи короткую подсказку по задаче. Используй точный плейсхолдер, если пользователь его указал. Для кнопок и чекбоксов пропусти placeholder.',
+    'В error перечисли известные ошибки, по одной строке «условие — сообщение». Если правил нет, оставь пустую строку.',
+    'Для поля только для чтения укажи readOnly: true. Для списка кошельков укажи в optionExample короткий вымышленный пример пункта с именем, ID и балансом.',
     'Если есть revision, отредактируй текущий список по этим правкам и верни весь новый список. Сохрани позиции, которые пользователь не просил менять.',
     JSON.stringify({
       task, components, revision, requirements: flow?.requirements, textStandard: prepared.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
-      currentItems: revision ? items.map(({ id, text, placeholder, value }) => ({ id, text, placeholder, value })) : undefined
+      currentItems: revision ? items.map(({ id, text, placeholder, value, readOnly, error, optionExample }) => ({ id, text, placeholder, value, readOnly, error, optionExample })) : undefined
     })
   ].join('\n');
   send('prepared', { prompt });
@@ -189,7 +190,7 @@ async function review(raw) {
     if (value != null && (typeof value !== 'string' || value.length > 120 || /[\r\n]/.test(value))) {
       throw new Error('GigaCode вернул некорректное моковое значение.');
     }
-    return { id: item.id, text: item.text.trim(), placeholder: placeholder?.trim(), value: value?.trim() };
+    return { id: item.id, text: item.text.trim(), placeholder: placeholder?.trim(), value: value?.trim(), readOnly: item.readOnly === true, optionExample: typeof item.optionExample === 'string' ? item.optionExample.slice(0, 240) : '', error: typeof item.error === 'string' ? item.error.slice(0, 3000) : '' };
   });
   const parts = new Map();
   for (const id of new Set(items.map(item => item.id))) {
@@ -216,29 +217,36 @@ async function review(raw) {
       node.type === 'COMPONENT' && node.id !== component.id)];
     parts.set(id, { variants, name: asset.name });
   }
-  prepared.items = items.map(item => ({ ...parts.get(item.id), ...item, variant: 0 }));
+  prepared.items = items.map(item => {
+    const part = parts.get(item.id);
+    const variant = item.readOnly ? part.variants.findIndex(component => isReadOnly(component.name)) : 0;
+    return { ...part, ...item, variant: Math.max(0, variant) };
+  });
   prepared.stage = "list";
   const previews = prepared.items.map(item => describeItem(item));
   send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: plan.reply });
 }
 
+function isReadOnly(name) {
+  return /(?:^|[,=]\s*)read[ _-]?only(?:\s*=\s*true)?(?=\s*(?:,|$))/i.test(name);
+}
+
 async function openProperties() {
   if (prepared?.stage !== 'list' || !prepared.items.length) throw new Error('Сначала согласуйте набор.');
   prepared.index = 0;
-  await showProperties();
+  await openCurrentComponent();
 }
 
-async function showProperties() {
-  prepared.stage = 'properties';
+async function openCurrentComponent() {
+  prepared.stage = 'copy';
   const { index, items } = prepared;
-  send('propertiesOpened', { index, total: items.length, item: await previewItem(items[index], false, true) });
+  send('componentOpened', { index, total: items.length, item: await previewItem(items[index], false, true) });
 }
 
 function requestCopy(revision = '') {
   const { index, items, stage } = prepared || {};
   const item = items?.[index];
-  if (!item || !['properties', 'copy'].includes(stage) ||
-      (stage === 'properties' && !item.confirmed)) {
+  if (!item || stage !== 'copy') {
     throw new Error('Подтвердите свойства компонента.');
   }
   const description = describeItem(item);
@@ -262,7 +270,7 @@ async function reviewCopy(raw) {
   const { index, items } = prepared;
   const current = items[index];
   const texts = Object.fromEntries(Object.entries(entry.texts || {}).filter(([key, value]) =>
-    current.fillKeys?.includes(key) && typeof value === 'string' && value.length <= 3000));
+    describeItem(current).fields.some(field => field.key === key && field.type === 'TEXT') && typeof value === 'string' && value.length <= 3000));
   const item = { ...current, texts, text: entry.text, placeholder: entry.placeholder, value: entry.value,
     error: entry.error || '', confirmed: false };
   const preview = await previewItem(item, true);
@@ -322,6 +330,7 @@ function describeItem(item, suggest = false, showAllFields = false) {
   const value = put('Моковое значение', key => /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i.test(key), item.value);
   return {
     name: item.name, text: item.text, copy, error: item.error, fillKeys: item.fillKeys,
+    readOnly: isReadOnly(item.variants[item.variant].name), requestedReadOnly: item.readOnly, optionExample: item.optionExample,
     missing: [!label && 'подпись', item.placeholder && !placeholder && 'плейсхолдер',
       item.value && !value && 'моковое значение'].filter(Boolean),
     variant: item.variant, variants: item.variants.map(component => component.name),
@@ -334,13 +343,18 @@ function describeItem(item, suggest = false, showAllFields = false) {
   };
 }
 
-async function configureItem({ index, variant, values, error, fillKeys }, confirm, editProperties = false) {
-  if (!['properties', 'copy'].includes(prepared?.stage)) throw new Error('Сначала согласуйте набор.');
+async function configureItem({ index, variant, values, error, live }, confirm, render = true) {
+  if (prepared?.stage !== 'copy') throw new Error('Сначала согласуйте набор.');
   const item = prepared?.items?.[index];
   if (!item || index !== prepared.index || !Number.isInteger(variant) || !item.variants[variant]) throw new Error('Компонент или вариант недоступен.');
   if (variant !== item.variant) {
+    const compatible = new Map(editableProperties(item.variants[variant]));
+    const priorValues = Object.entries(values || item.values || {});
     item.variant = variant;
-    item.values = undefined;
+    item.values = Object.fromEntries(priorValues.filter(([key, value]) =>
+      compatible.get(key)?.type === (typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT')));
+    values = undefined;
+    if (typeof error === 'string') item.error = error.trim().slice(0, 3000);
     item.fillKeys = undefined;
   }
   item.confirmed = false;
@@ -351,25 +365,9 @@ async function configureItem({ index, variant, values, error, fillKeys }, confir
       return type === 'TEXT' ? typeof value !== 'string' || value.length > 3000
         : type !== 'BOOLEAN' || typeof value !== 'boolean';
     })) throw new Error('Проверьте свойства компонента.');
-    if (prepared.stage === 'properties') {
-      if (!Array.isArray(fillKeys) || fillKeys.some(key => fields.get(key)?.type !== 'TEXT')) {
-        throw new Error('Проверьте выбранные текстовые свойства.');
-      }
-      item.fillKeys = fillKeys;
-      item.values = Object.fromEntries(Object.entries(item.values || {}).filter(([key]) =>
-        fields.get(key)?.type !== 'TEXT' || fillKeys.includes(key)));
-    }
     item.values = { ...item.values, ...values };
     if (prepared.stage === 'copy' && typeof error === 'string') item.error = error.trim().slice(0, 3000);
     item.confirmed = confirm;
-  }
-  if (editProperties) {
-    await showProperties();
-    return;
-  }
-  if (confirm && prepared.stage === 'properties') {
-    requestCopy();
-    return;
   }
   if (confirm) {
     prepared.index++;
@@ -377,11 +375,11 @@ async function configureItem({ index, variant, values, error, fillKeys }, confir
       prepared.stage = 'ready';
       send('readyToApply');
     } else {
-      await showProperties();
+      await openCurrentComponent();
     }
     return;
   }
-  send('itemConfigured', { index, item: await previewItem(item, false, prepared.stage === 'properties'), confirmed: item.confirmed });
+  if (render) send(live ? 'itemPreview' : 'itemConfigured', { index, item: await previewItem(item, false, prepared.stage === 'properties'), confirmed: item.confirmed });
 }
 
 function readLightboxes() {
@@ -635,9 +633,12 @@ async function apply() {
   send('applied', { count: inserted.length, target: body.name });
 }
 
-pixso.ui.onmessage = async message => {
-  if (busy) return;
-  busy = true;
+let messageQueue = Promise.resolve();
+pixso.ui.onmessage = message => {
+  messageQueue = messageQueue.then(() => handleMessage(message));
+};
+
+async function handleMessage(message) {
   try {
     switch (message.type) {
       case 'init':
@@ -683,14 +684,11 @@ pixso.ui.onmessage = async message => {
         await openProperties();
         break;
       case 'requestCopy':
+        if (message.draft && prepared?.stage === 'copy') await configureItem(message.draft, false, false);
         requestCopy(message.revision);
         break;
       case 'reviewCopy':
         await reviewCopy(message.raw);
-        break;
-      case 'editProperties':
-        if (prepared?.stage !== 'copy') throw new Error('Сначала откройте согласование текстов.');
-        await configureItem(message, false, true);
         break;
       case 'chooseVariant':
       case 'previewItem':
@@ -708,7 +706,5 @@ pixso.ui.onmessage = async message => {
     const stage = { prepare: 'Подготовка запроса', review: 'Проверка предложения', apply: 'Вставка полей' }[message.type];
     const detail = error.message || String(error);
     send('error', { message: stage ? stage + ' — ' + detail : detail });
-  } finally {
-    busy = false;
   }
 };

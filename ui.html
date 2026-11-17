@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 13.11.6</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.1</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Подключение GigaCode CLI</summary>
@@ -85,6 +85,10 @@
 <script>
 const $ = id => document.getElementById(id);
 let busy = false;
+let pendingMessage;
+let readDraft;
+let previewTimer;
+let replacePreview;
 let formPlaced = false;
 let componentCount = 0;
 let stage = 'list';
@@ -133,6 +137,9 @@ function resetPlan() {
   $('revision').value = '';
   componentCount = 0;
   stage = 'list';
+  readDraft = undefined;
+  pendingMessage = undefined;
+  clearTimeout(previewTimer);
   $('componentChat').replaceChildren();
 }
 
@@ -172,6 +179,7 @@ $('prepare').onclick = () => {
   setBusy(true);
   $('plan').hidden = false;
   addMessage('componentChat', 'Вы', $('task').value.trim());
+  showWorking();
   status('Готовлю запрос…');
   post('prepare', { task: $('task').value.trim(), standard: $('standard').value });
 };
@@ -186,7 +194,8 @@ $('revise').onclick = () => {
   setBusy(true);
   status('Обновляю предложение…');
   addMessage('componentChat', 'Вы', revision);
-  post(stage === 'copy' ? 'requestCopy' : 'revise', { revision });
+  showWorking();
+  post(stage === 'copy' ? 'requestCopy' : 'revise', { revision, draft: readDraft?.() });
 };
 
 function addMessage(chat, author, text) {
@@ -196,7 +205,29 @@ function addMessage(chat, author, text) {
   const name = document.createElement('strong');
   name.textContent = author;
   item.append(name, '\n' + text);
-  $(chat).appendChild(item);
+  if (chat === 'componentChat' && author === 'GigaCode' && pendingMessage) {
+    pendingMessage.replaceWith(item);
+    pendingMessage = null;
+  } else $(chat).appendChild(item);
+  return item;
+}
+
+function showWorking() {
+  pendingMessage = addMessage('componentChat', 'GigaCode', 'GigaChat работает…');
+}
+
+function componentLine(item) {
+  const name = item.readOnly ? (item.name.includes(' / ') ? item.name.replace(' / ', ' read-only / ') : item.name + ' read-only') : item.name;
+  return item.text + ' · ' + name +
+    (item.requestedReadOnly && !item.readOnly ? ' · read-only недоступен в этом варианте' : '');
+}
+
+function fieldLabel(key) {
+  const name = key.replace(/#.*$/, '');
+  if (/^(label|caption|title|field[ _-]?label|подпись|заголовок)$/i.test(name)) return 'Подпись';
+  if (/^(placeholder|плейсхолдер)$/i.test(name)) return 'Подсказка';
+  if (/^(value|input[ _-]?value|значение)$/i.test(name)) return 'Значение';
+  return name;
 }
 
 for (const id of ['requirements', 'standard', 'feedback']) {
@@ -269,19 +300,31 @@ $('openProperties').onclick = () => {
 function renderItem(index, item) {
   const card = document.createElement('li');
   const heading = document.createElement('strong');
-  heading.textContent = item.text + ' · ' + item.name;
+  heading.textContent = componentLine(item);
   card.appendChild(heading);
   const actions = document.createElement('p');
   card.appendChild(actions);
-  if (item.png?.length) {
-    const image = document.createElement('img');
-    image.alt = 'Превью ' + item.name;
-    image.src = 'data:image/png;base64,' + btoa(item.png.map(byte => String.fromCharCode(byte)).join(''));
-    card.appendChild(image);
-  } else {
-    const note = document.createElement('p');
-    note.textContent = 'Превью недоступно' + (item.previewError ? ' — ' + item.previewError : '');
-    card.appendChild(note);
+  const preview = document.createElement('div');
+  card.appendChild(preview);
+  replacePreview = result => {
+    preview.replaceChildren();
+    if (result.png?.length) {
+      const image = document.createElement('img');
+      image.alt = 'Превью ' + result.name;
+      image.src = 'data:image/png;base64,' + btoa(result.png.map(byte => String.fromCharCode(byte)).join(''));
+      preview.appendChild(image);
+    } else {
+      const note = document.createElement('p');
+      note.textContent = 'Превью недоступно' + (result.previewError ? ' — ' + result.previewError : '');
+      preview.appendChild(note);
+    }
+  };
+  replacePreview(item);
+  if (item.optionExample) {
+    const example = document.createElement('p');
+    example.className = 'hint';
+    example.textContent = 'Пример пункта списка — ' + item.optionExample;
+    card.appendChild(example);
   }
   const variant = document.createElement('select');
   item.variants.forEach((name, i) => variant.add(new Option(name, i)));
@@ -289,43 +332,37 @@ function renderItem(index, item) {
   const state = document.createElement('label');
   state.textContent = 'Базовый вариант';
   state.appendChild(variant);
-  state.hidden = stage === 'copy';
-  card.appendChild(state);
+  const settings = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = 'Вариант и свойства';
+  settings.append(summary, state);
+  card.appendChild(settings);
+  if (item.missing?.includes('подпись') && item.copy.some(copy => copy.title === 'Подпись')) {
+    const note = document.createElement('p');
+    note.className = 'hint';
+    note.textContent = 'Подпись не привязана к текстовому слою. Проверьте доступные поля или смените вариант.';
+    card.appendChild(note);
+  }
   const fields = new Map();
-  const fill = new Map();
   for (const field of item.fields) {
     const label = document.createElement('label');
-    if (stage === 'copy' && field.type === 'BOOLEAN') continue;
-    label.textContent = field.key.replace(/#.*$/, '');
+    label.textContent = fieldLabel(field.key);
     const input = document.createElement('input');
-    const chooseFill = stage === 'properties' && field.type === 'TEXT';
-    input.type = chooseFill || field.type === 'BOOLEAN' ? 'checkbox' : 'text';
-    if (chooseFill) label.textContent = 'Заполнить «' + label.textContent + '»';
+    input.type = field.type === 'BOOLEAN' ? 'checkbox' : 'text';
     if (input.type === 'checkbox') input.checked = Boolean(field.value);
     else input.value = field.value ?? '';
-    if (chooseFill) {
-      input.checked = item.fillKeys?.includes(field.key) ?? true;
-      fill.set(field.key, input);
-    } else {
-      fields.set(field.key, input);
-    }
+    fields.set(field.key, input);
     label.appendChild(input);
-    card.appendChild(label);
+    if (field.type === 'BOOLEAN') settings.appendChild(label);
+    else card.insertBefore(label, settings);
   }
   if (!item.fields.some(field => field.type === 'TEXT')) {
     const hint = document.createElement('p');
     hint.className = 'hint';
-    hint.textContent = stage === 'properties'
-      ? 'В этом варианте нет редактируемых текстовых свойств.'
-      : 'На фрейме останется текст компонента. Чтобы заполнить поле, проверьте вариант и свойства.';
+    hint.textContent = 'На фрейме останется текст компонента. Чтобы заполнить поле, проверьте вариант и свойства.';
     card.appendChild(hint);
   }
   if (stage === 'copy') {
-    const back = document.createElement('button');
-    back.type = 'button';
-    back.textContent = 'Изменить вариант и свойства';
-    back.onclick = () => sendValues('editProperties');
-    actions.appendChild(back);
     if (fields.size && item.copy.length) {
       const hint = document.createElement('p');
       hint.className = 'hint';
@@ -333,42 +370,80 @@ function renderItem(index, item) {
       card.insertBefore(hint, state.nextSibling);
     }
   }
-  const error = document.createElement('textarea');
-  error.maxLength = 3000;
-  error.value = item.error || '';
-  const errorLabel = document.createElement('label');
-  errorLabel.textContent = 'Состояния ошибки (условие и текст)';
-  errorLabel.hidden = stage !== 'copy';
-  errorLabel.appendChild(error);
-  card.appendChild(errorLabel);
+  const errors = document.createElement('fieldset');
+  const legend = document.createElement('legend');
+  legend.textContent = 'Ошибки';
+  const addError = document.createElement('button');
+  addError.type = 'button';
+  addError.textContent = 'Добавить ошибку';
+  const errorRows = new Map();
+  const appendError = (condition = '', message = '') => {
+    const row = document.createElement('div');
+    const when = document.createElement('input');
+    const what = document.createElement('input');
+    for (const [labelText, input, value] of [['Когда показать', when, condition], ['Что написать', what, message]]) {
+      const label = document.createElement('label');
+      label.textContent = labelText;
+      input.value = value;
+      label.appendChild(input);
+      row.appendChild(label);
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Удалить ошибку';
+    remove.onclick = () => {
+      errorRows.delete(when);
+      row.remove();
+    };
+    row.appendChild(remove);
+    errorRows.set(when, what);
+    errors.insertBefore(row, addError);
+  };
+  errors.append(legend, addError);
+  for (const line of (item.error || '').split('\n').filter(Boolean)) {
+    const separator = line.indexOf(' — ');
+    if (separator < 0) appendError('', line);
+    else appendError(line.slice(0, separator), line.slice(separator + 3));
+  }
+  addError.onclick = () => appendError();
+  card.appendChild(errors);
   const confirm = document.createElement('button');
   confirm.type = 'button';
-  confirm.textContent = stage === 'properties' ? 'Подтвердить свойства и предложить тексты' : 'Подтвердить тексты и ошибки';
+  confirm.textContent = 'Подтвердить компонент';
   actions.appendChild(confirm);
   const refresh = document.createElement('button');
   refresh.type = 'button';
   refresh.textContent = 'Обновить превью';
   actions.appendChild(refresh);
-  card.addEventListener('input', () => {
-    refresh.textContent = 'Обновить превью · есть правки';
+  card.addEventListener('input', event => {
+    if (event.target === variant || errors.contains(event.target)) return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      if (!busy && card.isConnected) post('previewItem', { ...readDraft(), live: true });
+    }, 400);
   });
   variant.onchange = () => {
+    clearTimeout(previewTimer);
     setBusy(true);
-    post('chooseVariant', { index, variant: Number(variant.value) });
+    post('chooseVariant', readDraft());
   };
+  readDraft = () => ({
+    index, variant: Number(variant.value),
+    values: Object.fromEntries(Array.from(fields, ([key, input]) =>
+      [key, input.type === 'checkbox' ? input.checked : input.value])),
+    error: Array.from(errorRows, ([when, what]) =>
+      [when.value.trim(), what.value.trim()].filter(Boolean).join(' — ')).filter(Boolean).join('\n')
+  });
   const sendValues = type => {
-    const values = Object.fromEntries(Array.from(fields, ([key, input]) =>
-      [key, input.type === 'checkbox' ? input.checked : input.value]));
+    clearTimeout(previewTimer);
     setBusy(true);
-    post(type, { index, variant: Number(variant.value), values, error: error.value, fillKeys: Array.from(fill).filter(([, input]) => input.checked).map(([key]) => key) });
+    post(type, readDraft());
   };
   refresh.onclick = () => sendValues('previewItem');
   confirm.onclick = () => {
     const details = Array.from(fields, ([key, input]) => key.replace(/#.*$/, '') + ' — ' +
       (input.type === 'checkbox' ? (input.checked ? 'включено' : 'выключено') : input.value));
-    for (const [key, input] of fill) details.push(key.replace(/#.*$/, '') + ' — ' + (input.checked ? 'заполнить' : 'оставить по умолчанию'));
-    if (stage === 'copy') details.push('Ошибки — ' + (error.value || 'без ошибок'));
-    else details.unshift('Вариант — ' + variant.selectedOptions[0].textContent);
+    details.push('Ошибки — ' + (readDraft().error || 'без ошибок'));
     addMessage('componentChat', 'Вы', heading.textContent + '\n' + details.join('\n'));
     sendValues('confirmItem');
   };
@@ -421,7 +496,7 @@ window.addEventListener('message', async event => {
       $('planTitle').textContent = 'Согласование компонентов';
       $('revision').value = '';
       addMessage('componentChat', 'GigaCode', [message.reply, ...message.items.map(item =>
-        item.text + ' · ' + item.name)].filter(Boolean).join('\n') || 'Список компонентов пуст.');
+        componentLine(item))].filter(Boolean).join('\n') || 'Список компонентов пуст.');
       $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
       $('plan').hidden = false;
       status(message.items.length ? '' : 'В предложении больше нет компонентов.');
@@ -434,12 +509,12 @@ window.addEventListener('message', async event => {
         status(error.message, true);
       }
       break;
-    case 'propertiesOpened':
+    case 'componentOpened':
     case 'copyOpened':
-      stage = message.type === 'copyOpened' ? 'copy' : 'properties';
+      stage = 'copy';
       $('planTitle').textContent = 'Компонент ' + (message.index + 1) + ' из ' + message.total;
       $('items').replaceChildren(renderItem(message.index, message.item));
-      if (stage === 'copy') {
+      if (message.type === 'copyOpened') {
         $('revision').value = '';
         addMessage('componentChat', 'GigaCode', [message.reply, ...message.item.fields.filter(field => field.type === 'TEXT' && field.value).map(field =>
           field.key.replace(/#.*$/, '') + ' — ' + field.value), ...message.item.copy.map(copy =>
@@ -447,6 +522,9 @@ window.addEventListener('message', async event => {
       }
       status('');
       break;
+    case 'itemPreview':
+      if (stage === 'copy' && !busy) replacePreview?.(message.item);
+      return;
     case 'itemConfigured':
       $('items').replaceChildren(renderItem(message.index, message.item));
       status('');
@@ -480,6 +558,10 @@ window.addEventListener('message', async event => {
       break;
     default:
       return;
+  }
+  if (pendingMessage) {
+    pendingMessage.remove();
+    pendingMessage = null;
   }
   setBusy(false);
 });
