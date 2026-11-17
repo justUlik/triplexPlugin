@@ -11,6 +11,8 @@ const formFamilies = [
 const lightboxKey = 'triplex-lightbox-variants';
 const lightboxSizes = ['SM', 'MD', 'LG', 'XL'];
 let prepared;
+let conversation = [];
+let itemSequence = 0;
 let flow;
 let approvedSource;
 let pendingFlow;
@@ -19,7 +21,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.3' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.4' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -135,6 +137,7 @@ async function prepare({ task, standard }) {
   if (!isFormBody(frame, body)) throw new Error('Фрейм изменился. Запросите компоненты заново.');
   const catalog = formCatalog(activeLibraryAssets || []);
   if (!catalog.length) throw new Error('Pixso не вернул подходящие поля из библиотеки установленного LightBox.');
+  conversation = [{ role: 'user', text: task.trim() }];
   prepared = { frameId: frame.id, bodyId: body.id, catalog, task: task.trim(), standard: typeof standard === 'string' ? standard.trim().slice(0, 8000) : flow?.standard };
   sendPlanRequest();
 }
@@ -154,7 +157,7 @@ function sendPlanRequest(revision) {
     'Для поля только для чтения укажи readOnly: true. Для списка кошельков укажи в optionExample короткий вымышленный пример пункта с именем, ID и балансом.',
     'Если есть revision, отредактируй текущий список по этим правкам и верни весь новый список. Сохрани позиции, которые пользователь не просил менять.',
     JSON.stringify({
-      task, components, revision, requirements: flow?.requirements, textStandard: prepared.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
+      task, components, revision, conversation, requirements: flow?.requirements, textStandard: prepared.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
       currentItems: revision ? items.map(({ id, text, placeholder, value, readOnly, error, optionExample }) => ({ id, text, placeholder, value, readOnly, error, optionExample })) : undefined
     })
   ].join('\n');
@@ -220,11 +223,99 @@ async function review(raw) {
   prepared.items = items.map(item => {
     const part = parts.get(item.id);
     const variant = item.readOnly ? part.variants.findIndex(component => isReadOnly(component.name)) : 0;
-    return { ...part, ...item, variant: Math.max(0, variant) };
+    return { ...part, ...item, uid: ++itemSequence, variant: Math.max(0, variant) };
   });
   prepared.stage = "list";
   const previews = prepared.items.map(item => describeItem(item));
-  send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: plan.reply });
+  conversation.push({ role: 'assistant', text: plan.reply || '', components: items });
+  if (!prepared.importOnly) send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: plan.reply });
+}
+
+function requestConversation({ revision }) {
+  if (!prepared?.items || typeof revision !== 'string' || !revision.trim()) throw new Error('Введите сообщение.');
+  conversation.push({ role: 'user', text: revision.trim() });
+  const components = prepared.items.map(item => ({
+    uid: item.uid, catalogId: item.id, ...describeItem(item), values: item.values, confirmed: item.confirmed
+  }));
+  send('dialogRequest', { prompt: [
+    'Ты согласуешь форму с пользователем. Учитывай всю историю и текущие настройки. Последняя просьба уточняет предыдущие.',
+    'Ответь JSON: {"reply":"ответ пользователю","action":"reply|configure|list","updates":[{"uid":1,"variant":0,"values":{},"error":""}],"items":[{"uid":1}]}',
+    'reply — вопрос или объяснение без изменений. configure — изменения свойств, текстов, ошибок любого существующего компонента.',
+    'updates содержит только изменяемые поля. values использует точные ключи fields. variant — индекс из variants. Не выдумывай ключи и варианты.',
+    'list — изменение состава или порядка. items — весь новый порядок: {"uid":1} сохраняет существующий компонент со всеми настройками, {"id":1,"text":"Подпись","placeholder":"","value":"","readOnly":false} добавляет из каталога.',
+    'При list можно также передать updates для существующих компонентов. Сохраняй все незатронутые решения. Если выполнить просьбу по доступным свойствам нельзя, объясни это в reply.',
+    'Для кошелька учитывай имя, ID и баланс. Не придумывай бизнес-правила. Условия ошибок записывай отдельными строками «условие — сообщение».',
+    JSON.stringify({ conversation, task: prepared.task, standard: prepared.standard, components,
+      catalog: prepared.catalog.map((item, index) => ({ id: index + 1, name: item.name, use: item.use })) })
+  ].join('\n') });
+}
+
+async function reviewConversation(raw) {
+  const response = JSON.parse(raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1'));
+  if (typeof response.reply !== 'string' || !['reply', 'configure', 'list'].includes(response.action)) {
+    throw new Error('Не удалось прочитать ответ. Повторите отправку.');
+  }
+  const context = prepared;
+  const existing = new Map(context.items.map(item => [item.uid, item]));
+  const updated = new Map(existing);
+  for (const change of response.updates || []) {
+    const current = existing.get(change.uid);
+    if (!current) throw new Error('Ответ ссылается на неизвестный компонент.');
+    const variant = change.variant ?? current.variant;
+    if (!Number.isInteger(variant) || !current.variants[variant]) throw new Error('Недоступный вариант.');
+    const candidate = { ...current, variant, confirmed: false };
+    if (variant !== current.variant) {
+      const instance = candidate.variants[variant].createInstance();
+      try { instanceLabels.set(candidate.variants[variant], findInstanceLabel(instance)); }
+      finally { instance.remove(); }
+    }
+    const fields = new Map(editableProperties(candidate.variants[variant]));
+    candidate.values = Object.fromEntries(Object.entries(current.values || {}).filter(([key]) => fields.has(key)));
+    for (const [key, value] of Object.entries(change.values || {})) {
+      if (!fields.has(key) || (fields.get(key).type === 'BOOLEAN' ? typeof value !== 'boolean' : typeof value !== 'string' || value.length > 3000)) {
+        throw new Error('Ответ содержит недоступное свойство.');
+      }
+      candidate.values[key] = value;
+    }
+    if (change.error !== undefined) {
+      if (typeof change.error !== 'string' || change.error.length > 3000) throw new Error('Некорректные ошибки.');
+      candidate.error = change.error;
+    }
+    updated.set(change.uid, candidate);
+  }
+  let nextItems = context.items.map(item => updated.get(item.uid));
+  if (response.action === 'list') {
+    if (!Array.isArray(response.items) || response.items.length > 12) throw new Error('Некорректный список.');
+    const references = response.items.filter(item => item.uid !== undefined).map(item => item.uid);
+    if (new Set(references).size !== references.length || references.some(uid => !updated.has(uid))) throw new Error('Некорректные ссылки на компоненты.');
+    const additions = response.items.filter(item => item.uid === undefined);
+    let imported = [];
+    if (additions.length) {
+      const history = conversation.slice();
+      try {
+        prepared = { ...context, importOnly: true };
+        await review(JSON.stringify({ items: additions }));
+        imported = prepared.items;
+      } finally {
+        prepared = context;
+        conversation = history;
+      }
+    }
+    nextItems = response.items.map(item => item.uid === undefined ? imported.shift() : updated.get(item.uid));
+  }
+  context.items = nextItems;
+  conversation.push({ role: 'assistant', text: response.reply, changes: response });
+  if (response.action === 'list' || context.stage === 'list') {
+    context.stage = 'list';
+    send('proposal', { items: nextItems.map(item => describeItem(item)), reply: response.reply });
+  } else {
+    send('dialogReply', { reply: response.reply });
+    if (response.action === 'configure') {
+      context.index = nextItems.findIndex(item => !item.confirmed);
+      if (context.index < 0) context.index = 0;
+      await openCurrentComponent();
+    }
+  }
 }
 
 function isReadOnly(name) {
@@ -695,6 +786,13 @@ async function handleMessage(message) {
         break;
       case 'placeLightbox':
         await placeLightbox(message.size);
+        break;
+      case 'dialog':
+        if (message.draft && prepared?.stage === 'copy') await configureItem(message.draft, false, false);
+        requestConversation(message);
+        break;
+      case 'reviewDialog':
+        await reviewConversation(message.raw);
         break;
       case 'revise': {
         const revision = typeof message.revision === 'string' ? message.revision.trim() : '';

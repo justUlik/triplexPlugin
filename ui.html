@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.3</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.4</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -82,11 +82,13 @@
   <button id="approveFlow" type="button" hidden>Утвердить состояния и ошибки</button>
   <button id="createStates" type="button" hidden>Создать состояния на фрейме</button>
 </details>
-<button id="restart" type="button" hidden>Новая задача</button>
+<button id="retry" type="button" hidden>Повторить отправку</button>
 
 <script>
 const $ = id => document.getElementById(id);
 let busy = false;
+let lastRequest;
+let lastModelRequest;
 let pendingMessage;
 let readDraft;
 let previewTimer;
@@ -123,14 +125,14 @@ function setBusy(value) {
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
   $('approveFlow').disabled = value;
   $('scenario').hidden = stage !== 'done';
-  $('restart').hidden = !componentCount;
-  $('restart').disabled = value;
+  $('retry').hidden = !lastRequest;
+  $('retry').disabled = value;
   $('startForm').hidden = componentCount > 0;
   $('createStates').hidden = !hasSource || !flowApproved;
   $('items').querySelectorAll('input, select, textarea, button').forEach(control => { control.disabled = value; });
   $('openProperties').hidden = stage !== 'list';
   $('openProperties').disabled = value || !componentCount;
-  $('listActions').hidden = !['list', 'copy'].includes(stage);
+  $('listActions').hidden = !['list', 'copy', 'ready'].includes(stage);
   $('apply').hidden = stage !== 'ready';
   $('apply').disabled = value;
   $('place').disabled = value || !selectedSize();
@@ -159,12 +161,25 @@ function resetPlan() {
   $('componentChat').replaceChildren();
 }
 
-$('restart').onclick = () => {
-  resetPlan();
-  status('');
-  setBusy(false);
-  $('task').focus();
+$('retry').onclick = () => {
+  if (busy || !lastRequest) return;
+  setBusy(true);
+  showWorking();
+  if (lastModelRequest) {
+    requestModel(lastModelRequest.prompt).then(raw => post(lastModelRequest.responseType, { raw }))
+      .catch(error => { status(error.message, true); finishPending(error.message); setBusy(false); });
+  } else post(lastRequest.type, lastRequest.data);
 };
+
+function finishPending(text) {
+  if (pendingMessage) addMessage('componentChat', 'GigaCode', text);
+}
+
+function sendRequest(type, data) {
+  lastRequest = { type, data };
+  lastModelRequest = undefined;
+  post(type, data);
+}
 
 $('lightboxSize').onchange = () => {
   if (!busy) {
@@ -204,7 +219,7 @@ $('prepare').onclick = () => {
   addMessage('componentChat', 'Вы', $('task').value.trim());
   showWorking();
   status('Готовлю запрос…');
-  post('prepare', { task: $('task').value.trim(), standard: $('standard').value });
+  sendRequest('prepare', { task: $('task').value.trim(), standard: $('standard').value });
 };
 
 $('revise').onclick = () => {
@@ -218,7 +233,7 @@ $('revise').onclick = () => {
   status('Обновляю предложение…');
   addMessage('componentChat', 'Вы', revision);
   showWorking();
-  post(stage === 'copy' ? 'requestCopy' : 'revise', { revision, draft: readDraft?.() });
+  sendRequest('dialog', { revision, draft: readDraft?.() });
 };
 
 function addMessage(chat, author, text) {
@@ -299,19 +314,23 @@ $('apply').onclick = () => {
 
 async function requestModel(prompt) {
   let response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 100000);
   try {
     response = await fetch('http://127.0.0.1:43127/plan', {
+      signal: controller.signal,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + $('token').value.trim() },
       redirect: 'error',
       body: JSON.stringify({ prompt })
     });
-  } catch {
-    throw new Error('Не удалось подключиться. Проверьте, что мост GigaCode запущен на этом компьютере и Pixso разрешён доступ к нему.');
-  }
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Ошибка подключения к GigaCode CLI.');
-  return data.result;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Ошибка GigaCode CLI.');
+    return data.result;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Ответ не получен за 100 секунд. Нажмите «Повторить отправку».');
+    throw new Error(error.message || 'Не удалось подключиться. Проверьте, что мост GigaCode запущен на этом компьютере и Pixso разрешён доступ к нему.');
+  } finally { clearTimeout(timer); }
 }
 
 $('openProperties').onclick = () => {
@@ -490,6 +509,7 @@ window.addEventListener('message', async event => {
         return;
       } catch (error) {
         status(error.message, true);
+        finishPending(error.message);
       }
       break;
     case 'flowProposal':
@@ -510,18 +530,34 @@ window.addEventListener('message', async event => {
       status('Создано фреймов: ' + message.count + (message.skipped ? ' · Не удалось заполнить значений: ' + message.skipped : '') +
         (message.errorsPending ? ' · Текстов ошибок для ручного оформления: ' + message.errorsPending : ''));
       break;
+    case 'dialogRequest':
+      lastModelRequest = { prompt: message.prompt, responseType: 'reviewDialog' };
+      try { post('reviewDialog', { raw: await requestModel(message.prompt) }); return; }
+      catch (error) { status(error.message, true); finishPending(error.message); }
+      break;
+    case 'dialogReply':
+      lastRequest = undefined;
+      lastModelRequest = undefined;
+      addMessage('componentChat', 'GigaCode', message.reply);
+      break;
     case 'prepared':
+      lastModelRequest = { prompt: message.prompt, responseType: 'review' };
       status('GigaCode подбирает компоненты…');
       try {
         post('review', { raw: await requestModel(message.prompt) });
         return;
       } catch (error) {
         status(error.message, true);
+        finishPending(error.message);
       }
       break;
     case 'proposal':
+      lastRequest = undefined;
+      lastModelRequest = undefined;
       stage = 'list';
       componentCount = message.items.length;
+      $('items').replaceChildren();
+      readDraft = undefined;
       $('planTitle').textContent = 'Согласование компонентов';
       $('revision').value = '';
       addMessage('componentChat', 'GigaCode', [message.reply, ...message.items.map(item =>
@@ -536,6 +572,7 @@ window.addEventListener('message', async event => {
         return;
       } catch (error) {
         status(error.message, true);
+        finishPending(error.message);
       }
       break;
     case 'componentOpened':
