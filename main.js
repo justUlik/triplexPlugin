@@ -21,7 +21,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.4' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.5' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -623,7 +623,9 @@ async function resolveComponent(binding) {
   return component;
 }
 
-async function setInstanceValues(instance, values, name) {
+const loadedFonts = new Set();
+
+async function setInstanceValues(instance, values, name, progress = () => {}) {
   const overrides = Object.create(null);
   const layers = [];
   const fields = instance.componentProperties || {};
@@ -636,6 +638,7 @@ async function setInstanceValues(instance, values, name) {
     const type = typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT';
     if (fields[key]?.type !== type) throw new Error('Недоступно свойство «' + key + '» в «' + name + '».');
   }
+  progress('Применяю свойства');
   if (Object.keys(overrides).length) {
     if (typeof instance.setProperties !== 'function') throw new Error('Pixso не поддерживает изменение свойств экземпляра через setProperties.');
     instance.setProperties({ ...overrides });
@@ -647,9 +650,20 @@ async function setInstanceValues(instance, values, name) {
       throw new Error('Вложенная подпись недоступна в «' + name + '».');
     }
     if (layer.characters === value) continue;
-    const fonts = typeof layer.getRangeAllFontNames === 'function' && layer.characters.length
+    let fonts = typeof layer.getRangeAllFontNames === 'function' && layer.characters.length
       ? layer.getRangeAllFontNames(0, layer.characters.length) : [layer.fontName];
-    for (const font of fonts) await pixso.loadFontAsync(font);
+    if (!fonts.every(font => font && typeof font.family === 'string')) {
+      fonts = (layer.textStyles || []).map(range => range.textStyle?.fontName).filter(Boolean);
+    }
+    if (!fonts.length) throw new Error('Не удалось определить шрифт вложенной подписи.');
+    for (const font of fonts) {
+      const key = JSON.stringify(font);
+      if (loadedFonts.has(key)) continue;
+      progress('Загружаю шрифт ' + font.family + ' ' + font.style);
+      await pixso.loadFontAsync(font);
+      if (instance.removed) throw new Error('Подготовка превью отменена.');
+      loadedFonts.add(key);
+    }
     layer.characters = value;
     if (layer.characters !== value) throw new Error('Pixso не применил текст вложенной подписи в «' + name + '».');
   }
@@ -666,8 +680,9 @@ function publishPreview(type, item, message, suggest = false) {
   let description;
   try {
     instance = component.createInstance();
-    instance.x = pixso.viewport.center.x + 100000;
-    instance.y = pixso.viewport.center.y;
+    const frame = prepared?.frameId ? pixso.getNodeById(prepared.frameId) : null;
+    instance.x = frame ? frame.x + frame.width + 48 : pixso.viewport.center.x;
+    instance.y = frame ? frame.y : pixso.viewport.center.y;
     instanceLabels.set(component, findInstanceLabel(instance));
     description = describeItem(item, suggest);
   } catch (error) {
@@ -678,12 +693,16 @@ function publishPreview(type, item, message, suggest = false) {
   }
   const previewId = ++previewSequence;
   let cancelled = false;
-  activePreview = { previewId, cancel() {
+  let started = false;
+  activePreview = { previewId, start() {
+    if (started || cancelled) return;
+    started = true;
+    renderPreview();
+  }, cancel() {
     cancelled = true;
     if (!instance.removed) instance.remove();
   } };
   send(type, { ...message, item: { ...description, previewId } });
-  renderPreview();
   return description;
 
   async function renderPreview() {
@@ -691,9 +710,12 @@ function publishPreview(type, item, message, suggest = false) {
     try {
       const values = Object.fromEntries(description.fields.filter(field => field.value != null)
         .map(field => [field.key, field.value]));
-      await setInstanceValues(instance, values, item.name);
+      await setInstanceValues(instance, values, item.name, stage => {
+        if (!cancelled) send('previewProgress', { previewId, stage });
+      });
       if (cancelled) return;
       if (typeof instance.exportAsync !== 'function') throw new Error('Pixso не поддерживает экспорт экземпляра через exportAsync.');
+      send('previewProgress', { previewId, stage: 'Экспортирую изображение в Pixso' });
       const png = await instance.exportAsync({ format: 'PNG' });
       result = { png: Array.from(png) };
     } catch (error) {
@@ -814,6 +836,9 @@ async function handleMessage(message) {
         break;
       case 'reviewCopy':
         await reviewCopy(message.raw);
+        break;
+      case 'renderPreview':
+        if (activePreview?.previewId === message.previewId) activePreview.start();
         break;
       case 'cancelPreview':
         if (activePreview?.previewId === message.previewId) {

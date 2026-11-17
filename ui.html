@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.4</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.5</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -95,6 +95,8 @@ let previewTimer;
 let replacePreview;
 let imageTimer;
 let activePreviewId;
+let previewStage = '';
+let previewUrl;
 let formPlaced = false;
 let componentCount = 0;
 let stage = 'list';
@@ -351,20 +353,31 @@ function renderItem(index, item) {
   replacePreview = result => {
     clearTimeout(imageTimer);
     activePreviewId = result.pending ? result.previewId : undefined;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = undefined;
     preview.replaceChildren();
     if (result.png?.length) {
       const image = document.createElement('img');
       image.alt = 'Превью ' + result.name;
-      image.src = 'data:image/png;base64,' + btoa(result.png.map(byte => String.fromCharCode(byte)).join(''));
+      previewUrl = URL.createObjectURL(new Blob([new Uint8Array(result.png)], { type: 'image/png' }));
+      image.onerror = () => {
+        replacePreview({ previewError: 'Не удалось открыть изображение, полученное от Pixso.' });
+      };
+      image.src = previewUrl;
       preview.appendChild(image);
     } else {
       const note = document.createElement('p');
+      note.dataset.previewStatus = '';
       note.textContent = result.pending ? 'Готовлю превью…' : 'Превью недоступно' + (result.previewError ? ' — ' + result.previewError : '');
       preview.appendChild(note);
-      if (result.pending) imageTimer = setTimeout(() => {
+      if (result.pending) {
+        previewStage = 'Создан экземпляр, ожидаю подготовку';
+        post('renderPreview', { previewId: result.previewId });
+        imageTimer = setTimeout(() => {
         post('cancelPreview', { previewId: result.previewId });
-        replacePreview({ previewError: 'Pixso не подготовил изображение вовремя. Можно продолжить редактирование или обновить превью.' });
-      }, 12000);
+        replacePreview({ previewError: 'Остановилось на этапе «' + previewStage + '». Нажмите «Обновить превью», чтобы повторить.' });
+        }, 20000);
+      }
     }
   };
   replacePreview({ ...item, pending: Boolean(item.previewId) });
@@ -590,6 +603,13 @@ window.addEventListener('message', async event => {
       break;
     case 'itemPreview':
       if (stage === 'copy') replacePreview?.({ ...message.item, pending: Boolean(message.item.previewId) });
+      return;
+    case 'previewProgress':
+      if (activePreviewId === message.previewId) {
+        previewStage = message.stage;
+        const note = $('items').querySelector('[data-preview-status]');
+        if (note) note.textContent = message.stage + '…';
+      }
       return;
     case 'previewRendered':
       if (stage === 'copy' && activePreviewId === message.item.previewId) replacePreview?.(message.item);
