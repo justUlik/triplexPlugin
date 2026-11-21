@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.1</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.2</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -58,6 +58,7 @@
 
 </section>
 
+<p id="catalogInfo" class="hint" hidden></p>
 <p id="status" role="status" aria-live="polite">Интерфейс загружается…</p>
 <section id="plan" hidden>
   <h2 id="planTitle">1. Согласуйте набор компонентов</h2>
@@ -158,6 +159,7 @@ function setBusy(value) {
 function resetPlan() {
   $('plan').hidden = true;
   $('target').textContent = '';
+  $('catalogInfo').hidden = true;
   $('planTitle').textContent = 'Согласование компонентов';
   $('items').replaceChildren();
   $('revision').value = '';
@@ -554,6 +556,7 @@ window.addEventListener('message', async event => {
   const message = event.data?.pluginMessage;
   if (!message) return;
   try {
+  if (message.catalogInfo) { $('catalogInfo').textContent = message.catalogInfo; $('catalogInfo').hidden = false; }
   switch (message.type) {
     case 'flowRequest':
       try {

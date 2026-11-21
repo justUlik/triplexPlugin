@@ -19,7 +19,7 @@ test('catalog excludes buttons and retains specialized components beyond four en
     {key:'d', type:'COMPONENT', name:'DatePicker', categories:['TextField']}
   ])`);
   assert.equal(result.length, 8);
-  assert.equal(result.find(n => n.key === 'd').use, 'Выбор даты.');
+  assert.equal(result.find(n => n.key === 'd').knowledgeName, 'DateField');
 });
 test('states cannot be requested before layout is locked', () => {
   const { run } = backend();
@@ -117,4 +117,55 @@ test('error exclusions survive follow-up proposals', async () => {
   await receive({type:'flowProposal',reply:'Добавлено',states:[state,{name:'Success',condition:'Saved',values:{},errors:[]}]});
   assert.equal(vm.runInContext('flowSelection[0].errors[0]',ctx),false);
   assert.equal(vm.runInContext('flowSelection[1].included',ctx),true);
+});
+
+test('full catalogue retains display, layout, specialized and unknown assets', () => {
+  const {run}=backend();
+  const result=run(`formCatalog(['Amount','AmountField','NumberField','MaskedField','MultiselectField','SuggestField','SelectExtendedField','UploadZone','TableBasic','Title','Text','Island','OurWalletPicker'].map((name,i)=>({key:String(i),name,type:'COMPONENT'})))`);
+  assert.equal(result.length,13);
+  for (const item of result.slice(0,-1)) assert.equal(item.knowledgeName,item.name);
+  assert.equal(result.at(-1).knowledgeName,null);
+  assert.match(result.at(-1).use,/Не считать TextField/);
+});
+test('mapping distinguishes compound names, aliases, specific leaves and unknown fields', () => {
+  const {run}=backend();
+  for (const [name,expected] of [['Amount Field','AmountField'],['Text Area','TextareaField'],['TextField','TextField'],['Text','Text'],['SMS Field','SMSField'],['Select Extended Field','SelectExtendedField'],['Chip Select','ChipSelect']]) {
+    assert.equal(run(`componentKnowledge({name:${JSON.stringify(name)}}).name`),expected);
+  }
+  assert.equal(run(`componentKnowledge({name:'WalletField',categories:['TextFields']})`),null);
+  assert.equal(run(`componentKnowledge({name:'State=Default',containerName:'NumberField',categories:['TextFields']}).name`),'NumberField');
+  assert.equal(run(`componentKnowledge({name:'TextField / AmountField'}).name`),'AmountField');
+});
+test('component sets are listed once and still expose variants for import', () => {
+  const {run}=backend();
+  const result=run(`formCatalog([{key:'set',type:'COMPONENT_SET',name:'AmountField',variants:[{key:'v1',name:'Default'},{key:'v2',name:'Error'}]}, {key:'v1',type:'COMPONENT',name:'AmountField / Default'}, {key:'v2',type:'COMPONENT',name:'AmountField / Error'}])`);
+  assert.equal(result.length,1);
+  assert.equal(result[0].variants.length,2);
+});
+test('all 137 Storybook sections have sources and unique names; allowed catalog fits model budget', () => {
+  const {run}=backend();
+  assert.equal(run('triplexKnowledge.components.length'),137);
+  assert.equal(run('new Set(triplexKnowledge.components.map(d=>d.name)).size'),137);
+  assert.equal(run('triplexKnowledge.components.every(d=>d.use && d.source.startsWith("https://github.com/SberBusiness/triplex-next/") && d.storybook.startsWith("https://triplex-design.ru/storybook/"))'),true);
+  const prompt=run(`(() => {const catalog=formCatalog(triplexKnowledge.components.map((d,i)=>({key:String(i),type:'COMPONENT',name:d.name})));return withTriplexKnowledge(JSON.stringify({components:modelCatalog(catalog)}),catalog)})()`);
+  assert.ok(prompt.length<=48000);
+  assert.match(prompt,/UploadZone/);
+  assert.match(prompt,/NumberField/);
+  assert.match(prompt,/triplexKnowledge/);
+  const knowledge=JSON.parse(prompt.split('\n').at(-1)).triplexKnowledge;
+  assert.equal(knowledge.components.length,133);
+});
+test('knowledge reaches initial selection, conversation, copy and states requests', () => {
+  const {run,messages}=backend();
+  run(`prepared={catalog:formCatalog([{key:'n',type:'COMPONENT',name:'NumberField'},{key:'a',type:'COMPONENT',name:'AmountField'}])}`);
+  for (const type of ['prepared','dialogRequest','copyRequest','flowRequest']) {
+    run(`send('${type}',{prompt:'Количество ЦФА и сумма инвестиции'})`);
+    assert.match(messages.at(-1).prompt,/Ввод целого или дробного числа/);
+    assert.match(messages.at(-1).prompt,/Ввод денежной суммы/);
+    assert.match(messages.at(-1).catalogInfo,/2 компонентов/);
+  }
+});
+test('oversized context reports an error instead of hiding catalog entries', () => {
+  const {run}=backend();
+  assert.throws(()=>run(`withTriplexKnowledge('x'.repeat(47000),[])`),/Компоненты не были скрыты/);
 });
