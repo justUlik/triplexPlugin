@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.2' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.3' });
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {
@@ -1491,12 +1491,13 @@ async function review(raw) {
 
 function requestConversation({ revision }) {
   if (!prepared?.items || typeof revision !== 'string' || !revision.trim()) throw new Error('Введите сообщение.');
+  prepared.revisionPending = true;
   conversation.push({ role: 'user', text: revision.trim() });
   const configuring = prepared.stage !== 'list';
   const definitions = {};
   const components = prepared.items.map(item => {
     const result = {
-      uid: item.uid, catalogId: item.id, text: item.text, placeholder: item.placeholder,
+      uid: item.uid, catalogId: item.id, name: item.name, text: item.text, placeholder: item.placeholder,
       value: item.value, readOnly: item.readOnly, error: item.error,
       optionExample: item.optionExample, confirmed: item.confirmed
     };
@@ -1515,13 +1516,135 @@ function requestConversation({ revision }) {
     'reply — вопрос или объяснение без изменений. configure — изменения свойств, текстов, ошибок любого существующего компонента.',
     'На этапе list правки подписей, подсказок, значений, readOnly и ошибок передавай в updates через text, placeholder, value, readOnly, error. На остальных этапах используй values и variant.',
     'updates содержит только изменяемые поля. values использует точные ключи fields. variant — индекс из variants. Не выдумывай ключи и варианты.',
-    'list — изменение состава или порядка. items — весь новый порядок: {"uid":1} сохраняет существующий компонент со всеми настройками, {"id":1,"text":"Подпись","placeholder":"","value":"","readOnly":false} добавляет из каталога.',
-    'uid — уникальный номер уже добавленного поля из components. catalogId/id — тип из каталога. Несколько Text Field могут иметь один catalogId, но разные uid. Копируй uid из components, не используй порядковый номер или catalogId вместо него. Каждый uid в items встречается один раз. Для нового поля передавай только id без uid.',
+    'На этапе list любые правки возвращай action:list и полный итоговый items. Удали из items ненужные строки. {"uid":1} сохраняет компонент, {"uid":1,"id":7} ЗАМЕНЯЕТ его тип на id=7 из каталога, сохраняя подпись. {"id":7,"text":"Подпись"} добавляет новый компонент. Поля text/placeholder/value/readOnly меняют настройки строки.',
+    'Замены типов и удаление на любом этапе требуют action:list с полным итоговым набором. Не сообщай о замене только в reply. Если нужен уточняющий вопрос, верни action:reply, needsClarification:true и reply с вопросом. Не утверждай, что что-то изменено, без изменений в items/updates.',
+    'Пример: убрать BodyPage и Island — исключить их uid; заменить MaskedField — сохранить uid поля и указать id TextField. Для расчётного счёта выбрать id SuggestField. Указания пользователя важнее рекомендации справочника. Краткий ответ разбивай на абзацы; не дублируй весь каталог в reply.',
+    'uid — уникальный номер уже добавленного поля из components. catalogId/id — тип из каталога. Несколько Text Field могут иметь один catalogId, но разные uid. Копируй uid из components, не используй порядковый номер или catalogId вместо него. Каждый uid в items встречается один раз. Для нового поля передавай только id без uid; для замены существующего — uid и новый id.',
     'При list можно также передать updates для существующих компонентов. Сохраняй все незатронутые решения. Если выполнить просьбу по доступным свойствам нельзя, объясни это в reply.',
     'Кнопки запрещены. Не предлагай ошибки и состояния до закрепления верстки. Выбирай специализированные компоненты по смыслу, не заменяй выбор, даты и переключатели TextField. По вопросу о TextField объясни выбор на основе переданного каталога.',
     JSON.stringify({ conversation, task: prepared.task, standard: prepared.standard, stage: prepared.stage, components, variantsByCatalogId: definitions,
       catalog: modelCatalog(prepared.catalog) })
   ].join('\n') });
+}
+
+function revisionSummary(before, after) {
+  const old = new Map(before.map(item => [item.uid, item]));
+  const next = new Map(after.map(item => [item.uid, item]));
+  const changes = [];
+  for (const item of before) if (!next.has(item.uid)) changes.push('Удалён: ' + item.text + ' · ' + item.name);
+  for (const item of after) {
+    const previous = old.get(item.uid);
+    if (!previous) changes.push('Добавлен: ' + item.text + ' · ' + item.name);
+    else if (previous.id !== item.id) changes.push('Заменён: ' + item.text + ' · ' + previous.name + ' → ' + item.name);
+    else if (JSON.stringify([previous.text, previous.placeholder, previous.value, previous.readOnly, previous.optionExample, previous.variant, previous.values]) !==
+      JSON.stringify([item.text, item.placeholder, item.value, item.readOnly, item.optionExample, item.variant, item.values])) changes.push('Обновлён: ' + item.text);
+  }
+  if (!changes.length && before.map(item => item.uid).join(',') !== after.map(item => item.uid).join(',')) changes.push('Изменён порядок компонентов.');
+  return changes;
+}
+
+async function reviewListRevision(response) {
+  const context = prepared;
+  if (response.action === 'reply' && response.needsClarification === true && !response.items?.length && !response.updates?.length) {
+    conversation.push({ role: 'assistant', text: response.reply });
+    send('dialogReply', { reply: response.reply, revisionPending: true });
+    return;
+  }
+  if (response.action !== 'list' || !Array.isArray(response.items) || response.items.length > 12) {
+    throw new Error('Модель ответила текстом, но не передала новый набор. Правки не применены. Повторите отправку или уточните запрос.');
+  }
+  const existing = new Map(context.items.map(item => [item.uid, item]));
+  const seen = new Set();
+  const normalize = value => typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  const changes = new Map();
+  if (response.updates !== undefined && !Array.isArray(response.updates)) throw new Error('Некорректные изменения.');
+  for (const change of response.updates || []) {
+    const uid = normalize(change?.uid);
+    if (!existing.has(uid) || changes.has(uid)) throw new Error('Некорректный uid в изменениях.');
+    changes.set(uid, change);
+  }
+  const allowed = new Set(['uid', 'id', 'text', 'placeholder', 'value', 'readOnly', 'optionExample', 'values', 'variant', 'error']);
+  const rows = response.items.map(entry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Некорректная строка нового набора.');
+    const uid = entry.uid === undefined ? undefined : normalize(entry.uid);
+    const previous = existing.get(uid);
+    if (uid !== undefined && (!previous || seen.has(uid))) throw new Error('Неизвестный или повторяющийся uid в новом наборе.');
+    if (uid !== undefined) seen.add(uid);
+    const patch = { ...changes.get(uid), ...entry };
+    if (Object.keys(patch).some(key => !allowed.has(key))) throw new Error('Ответ содержит неизвестное свойство. Для замены типа нужен id из каталога.');
+    const id = patch.id === undefined ? previous?.id : normalize(patch.id);
+    if (!Number.isInteger(id) || !context.catalog[id - 1]) throw new Error('Тип компонента отсутствует в каталоге.');
+    const spec = { ...previous, ...patch, id, uid };
+    if (typeof spec.text !== 'string' || !spec.text.trim() || spec.text.length > 120 || /[\r\n]/.test(spec.text)) throw new Error('Некорректная подпись компонента.');
+    for (const key of ['placeholder', 'value', 'optionExample']) {
+      if (spec[key] != null && (typeof spec[key] !== 'string' || spec[key].length > (key === 'optionExample' ? 240 : 120) || /[\r\n]/.test(spec[key]))) throw new Error('Некорректный текст компонента.');
+    }
+    if (spec.readOnly !== undefined && typeof spec.readOnly !== 'boolean') throw new Error('Некорректный read-only.');
+    return { previous, patch, spec, replace: !previous || previous.id !== id };
+  });
+  for (const uid of changes.keys()) if (!seen.has(uid)) throw new Error('Изменение ссылается на удалённый компонент.');
+  // Import into a temporary plan. Never partially replace the authoritative set.
+  const imports = rows.filter(row => row.replace);
+  let imported = [];
+  if (imports.length) {
+    const history = conversation.slice();
+    try {
+      prepared = { ...context, importOnly: true };
+      await review(JSON.stringify({ items: imports.map(row => row.spec) }));
+      imported = prepared.items;
+    } finally {
+      prepared = context;
+      conversation = history;
+    }
+  }
+  const nextItems = rows.map(({ previous, patch, spec, replace }) => {
+    let item = replace ? { ...imported.shift(), confirmed: false } : { ...previous };
+    if (replace && previous) item.uid = previous.uid;
+    for (const key of ['text', 'placeholder', 'value', 'readOnly', 'optionExample']) if (spec[key] !== undefined) item[key] = spec[key];
+    if (patch.variant !== undefined) item.variant = normalize(patch.variant);
+    else if (patch.readOnly !== undefined) {
+      const variant = item.variants.findIndex(component => isReadOnly(component.name) === patch.readOnly);
+      if (variant >= 0) item.variant = variant;
+    }
+    if (!Number.isInteger(item.variant) || !item.variants[item.variant]) throw new Error('Недоступный вариант нового компонента.');
+    const fields = new Map(editableProperties(item.variants[item.variant]));
+    // Preserve compatible manual values only within the same component type.
+    if (!replace && item.variant !== previous.variant) {
+      item.values = Object.fromEntries(Object.entries(item.values || {}).filter(([key, value]) => fields.get(key)?.type === (typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT')));
+      item.fillKeys = undefined;
+      item.texts = undefined;
+    }
+    const semantic = { text: isLabel, placeholder: key => /^(?:placeholder|плейсхолдер)(?:#|$)/i.test(key), value: key => /^(?:value|input[ _-]?value|значение)(?:#|$)/i.test(key) };
+    for (const [name, matches] of Object.entries(semantic)) if (patch[name] !== undefined && patch[name] !== previous?.[name]) {
+      item.values = { ...item.values };
+      item.texts = { ...item.texts };
+      for (const [key, prop] of fields) if (prop.type === 'TEXT' && matches(key)) { item.values[key] = patch[name]; delete item.texts[key]; }
+    }
+    if (patch.values !== undefined) {
+      if (!patch.values || typeof patch.values !== 'object' || Array.isArray(patch.values)) throw new Error('Некорректные свойства компонента.');
+      item.values = { ...item.values };
+      for (const [key, value] of Object.entries(patch.values)) {
+        const type = fields.get(key)?.type;
+        if (type === 'TEXT' ? typeof value !== 'string' || value.length > 3000 : type !== 'BOOLEAN' || typeof value !== 'boolean') throw new Error('Ответ содержит недоступное свойство нового компонента.');
+        item.values[key] = value;
+      }
+    }
+    item.error = '';
+    if (replace || revisionSummary([previous], [item]).length) item.confirmed = false;
+    return item;
+  });
+  const changesApplied = revisionSummary(context.items, nextItems);
+  if (!changesApplied.length) throw new Error('Модель вернула прежний набор без изменений. Правки не применены. Повторите отправку или уточните запрос.');
+  const descriptions = nextItems.map(item => describeItem(item));
+  context.items = nextItems;
+  context.stage = 'list';
+  context.index = 0;
+  context.revisionPending = false;
+  activePreview?.cancel();
+  activePreview = undefined;
+  conversation.push({ role: 'assistant', text: changesApplied.join('\n') });
+  send('proposal', { target: pixso.getNodeById(context.bodyId)?.name, items: descriptions,
+    changes: changesApplied, reply: '', revisionPending: false });
 }
 
 async function reviewConversation(raw) {
@@ -1530,6 +1653,13 @@ async function reviewConversation(raw) {
     throw new Error('Не удалось прочитать ответ. Повторите отправку.');
   }
   const context = prepared;
+  if (!context?.items) throw new Error('Сначала запросите компоненты.');
+  if (context.stage === 'list' || response.action === 'list') return reviewListRevision(response);
+  if (response.action === 'reply') {
+    if (response.needsClarification !== true) throw new Error('Ответ не содержит применимых изменений. Уточните запрос.');
+    send('dialogReply', { reply: response.reply, revisionPending: true });
+    return;
+  }
   const existing = new Map(context.items.map(item => [item.uid, item]));
   const updated = new Map(existing);
   const normalizeUid = value => typeof value === 'string' && /^\d+$/.test(value.trim())
@@ -1539,23 +1669,8 @@ async function reviewConversation(raw) {
     if (!change || typeof change !== 'object') throw new Error('Некорректное изменение компонента.');
     return { ...change, uid: normalizeUid(change.uid) };
   });
-  if (response.action === 'list') {
-    if (!Array.isArray(response.items) || response.items.length > 12) throw new Error('Некорректный список.');
-    response.items = response.items.map(item => {
-      if (!item || typeof item !== 'object') throw new Error('Некорректная строка списка компонентов.');
-      return item.uid === undefined ? item : { ...item, uid: normalizeUid(item.uid) };
-    });
-    const seen = new Set();
-    for (const item of response.items.filter(item => item.uid !== undefined)) {
-      if (!existing.has(item.uid)) throw new Error('GigaChat указал неизвестное поле uid=' + String(item.uid) +
-        '. Доступные поля: ' + [...existing.values()].map(field => field.uid + ' («' + field.text + '»)').join(', ') +
-        '. Нажмите «Повторить отправку».');
-      if (seen.has(item.uid)) throw new Error('GigaChat дважды включил поле «' + existing.get(item.uid).text +
-        '» (uid=' + item.uid + '). Для второго поля нужна новая запись из каталога. Нажмите «Повторить отправку».');
-      seen.add(item.uid);
-    }
-  }
   for (const change of changes) {
+    if (Object.keys(change).some(key => !['uid','variant','values','text','placeholder','value','optionExample','readOnly','error'].includes(key))) throw new Error('Для замены типа нужен action:list, полный items и новый id.');
     const current = existing.get(change.uid);
     if (!current) throw new Error('Ответ ссылается на неизвестный компонент.');
     let variant = change.variant ?? current.variant;
@@ -1594,30 +1709,16 @@ async function reviewConversation(raw) {
     updated.set(change.uid, candidate);
   }
   let nextItems = context.items.map(item => updated.get(item.uid));
-  if (response.action === 'list') {
-    if (!Array.isArray(response.items) || response.items.length > 12) throw new Error('Некорректный список.');
-    const additions = response.items.filter(item => item.uid === undefined);
-    let imported = [];
-    if (additions.length) {
-      const history = conversation.slice();
-      try {
-        prepared = { ...context, importOnly: true };
-        await review(JSON.stringify({ items: additions }));
-        imported = prepared.items;
-      } finally {
-        prepared = context;
-        conversation = history;
-      }
-    }
-    nextItems = response.items.map(item => item.uid === undefined ? imported.shift() : updated.get(item.uid));
-  }
+  const actualChanges = revisionSummary(context.items, nextItems);
+  if (!actualChanges.length) throw new Error('Модель не передала изменений. Правки не применены.');
   context.items = nextItems;
-  conversation.push({ role: 'assistant', text: response.reply });
+  context.revisionPending = false;
+  conversation.push({ role: 'assistant', text: actualChanges.join('\n') });
   if (response.action === 'list' || context.stage === 'list') {
     context.stage = 'list';
     send('proposal', { items: nextItems.map(item => describeItem(item)), reply: response.reply });
   } else {
-    send('dialogReply', { reply: response.reply });
+    send('dialogReply', { reply: actualChanges.join('\n'), revisionPending: false });
     if (response.action === 'configure') {
       context.index = nextItems.findIndex(item => !item.confirmed);
       if (context.index < 0) context.index = 0;
@@ -1631,6 +1732,7 @@ function isReadOnly(name) {
 }
 
 async function openProperties() {
+  if (prepared?.revisionPending) throw new Error('Сначала примените правки или явно оставьте текущий набор.');
   if (prepared?.stage !== 'list' || !prepared.items.length) throw new Error('Сначала согласуйте набор.');
   prepared.index = 0;
   await openCurrentComponent();
@@ -1742,6 +1844,7 @@ function describeItem(item, suggest = false, showAllFields = false) {
 }
 
 async function configureItem({ index, variant, values, error, live }, confirm, render = true) {
+  if (confirm && prepared?.revisionPending) throw new Error('Сначала завершите правки набора.');
   if (prepared?.stage !== 'copy') throw new Error('Сначала согласуйте набор.');
   const item = prepared?.items?.[index];
   if (!item || index !== prepared.index || !Number.isInteger(variant) || !item.variants[variant]) throw new Error('Компонент или вариант недоступен.');
@@ -2053,6 +2156,7 @@ async function insert(parent, item) {
 
 async function apply() {
   const context = prepared;
+  if (context?.revisionPending) throw new Error('Сначала завершите правки набора.');
   if (!context?.items?.length) throw new Error('Сначала получите список компонентов.');
   if (context.stage !== 'ready' || context.items.some(item => !item.confirmed)) {
     throw new Error('Подтвердите каждый компонент перед вставкой.');
@@ -2143,6 +2247,13 @@ async function handleMessage(message) {
       case 'placeLightbox':
         await placeLightbox(message.size);
         break;
+      case 'discardRevision':
+        if (prepared) {
+          prepared.revisionPending = false;
+          conversation.push({ role: 'user', text: 'Последние правки отменены. Оставить текущий фактический набор без изменений.' });
+        }
+        send('revisionDiscarded');
+        break;
       case 'dialog':
         if (message.draft && prepared?.stage === 'copy') await configureItem(message.draft, false, false);
         requestConversation(message);
@@ -2195,6 +2306,6 @@ async function handleMessage(message) {
   } catch (error) {
     const stage = { prepare: 'Подготовка запроса', review: 'Проверка предложения', apply: 'Вставка полей' }[message.type];
     const detail = error.message || String(error);
-    send('error', { message: stage ? stage + ' — ' + detail : detail });
+    send('error', { message: stage ? stage + ' — ' + detail : detail, revisionPending: Boolean(prepared?.revisionPending) });
   }
 };

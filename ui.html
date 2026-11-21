@@ -26,6 +26,9 @@
   .message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; padding: 10px 12px; background: white; border-radius: 10px; }
   .message.user { background: #dcefe5; margin-left: 12%; }
   #status { min-height: 20px; line-height: 1.4; }
+  .message p { margin: 8px 0; }
+  .message ul { margin: 8px 0; padding-left: 22px; }
+  .component-name { display: block; margin-top: 4px; overflow-wrap: anywhere; }
   #status.error { color: #a22222; }
 </style>
 </head>
@@ -40,7 +43,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.2</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.3</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -70,6 +73,7 @@
     <textarea id="revision" maxlength="3000" placeholder="Убери телефон. Вместо поля «Тип» поставь список."></textarea>
   </label>
   <button id="revise" type="button">Отправить</button>
+  <button id="keepCurrent" type="button" hidden>Оставить текущий набор без правок</button>
   <button id="openProperties" type="button">Подтвердить набор компонентов</button>
   </div>
   <button id="apply" hidden class="primary" type="button">Добавить на фрейм</button>
@@ -107,6 +111,7 @@ let previewUrl;
 let formPlaced = false;
 let componentCount = 0;
 let stage = 'list';
+let revisionPending = false;
 let flowApproved = false;
 let hasFlowDraft = false;
 let hasSource = false;
@@ -148,15 +153,19 @@ function setBusy(value) {
   $('createStates').hidden = !hasSource || !flowApproved;
   $('items').querySelectorAll('input, select, textarea, button').forEach(control => { control.disabled = value; });
   $('openProperties').hidden = stage !== 'list';
-  $('openProperties').disabled = value || !componentCount;
+  $('openProperties').disabled = value || !componentCount || revisionPending;
+  $('keepCurrent').hidden = !revisionPending;
+  $('keepCurrent').disabled = value;
+  if (revisionPending) $('items').querySelectorAll('button').forEach(button => { button.disabled = true; });
   $('listActions').hidden = !['list', 'copy', 'ready'].includes(stage);
   $('apply').hidden = stage !== 'ready';
-  $('apply').disabled = value;
+  $('apply').disabled = value || revisionPending;
   $('place').disabled = value || !selectedSize();
   $('prepare').disabled = $('task').disabled = value || !formPlaced;
 }
 
 function resetPlan() {
+  revisionPending = false;
   $('plan').hidden = true;
   $('target').textContent = '';
   $('catalogInfo').hidden = true;
@@ -247,6 +256,8 @@ $('revise').onclick = () => {
     return;
   }
   setBusy(true);
+  revisionPending = true;
+  setBusy(true);
   status('Обновляю предложение…');
   addMessage('componentChat', 'Вы', revision);
   showWorking();
@@ -259,7 +270,23 @@ function addMessage(chat, author, text) {
   item.className = 'message' + (author === 'Вы' ? ' user' : '');
   const name = document.createElement('strong');
   name.textContent = author;
-  item.append(name, '\n' + text);
+  item.appendChild(name);
+  const normalized = String(text).replace(/\\n/g, '\n').replace(/\\[ \t]*\n/g, '\n');
+  let list;
+  for (const line of normalized.split('\n').map(line => line.trim()).filter(Boolean)) {
+    const bullet = line.match(/^(?:[-*•]|\d+[.)])\s+(.+)$/);
+    if (bullet) {
+      if (!list) { list = document.createElement('ul'); item.appendChild(list); }
+      const row = document.createElement('li');
+      row.textContent = bullet[1];
+      list.appendChild(row);
+    } else {
+      list = undefined;
+      const paragraph = document.createElement('p');
+      paragraph.textContent = line;
+      item.appendChild(paragraph);
+    }
+  }
   if (chat === 'componentChat' && author === 'GigaCode' && pendingMessage) {
     pendingMessage.replaceWith(item);
     pendingMessage = null;
@@ -269,6 +296,26 @@ function addMessage(chat, author, text) {
 
 function showWorking() {
   pendingMessage = addMessage('componentChat', 'GigaCode', 'GigaChat работает…');
+}
+
+$('keepCurrent').onclick = () => {
+  if (busy) return;
+  setBusy(true);
+  post('discardRevision');
+};
+
+function renderProposal(items) {
+  $('items').replaceChildren();
+  for (const item of items) {
+    const row = document.createElement('li');
+    const label = document.createElement('strong');
+    label.textContent = item.text;
+    const type = document.createElement('span');
+    type.className = 'component-name hint';
+    type.textContent = item.name;
+    row.append(label, type);
+    $('items').appendChild(row);
+  }
 }
 
 function componentLine(item) {
@@ -556,6 +603,7 @@ window.addEventListener('message', async event => {
   const message = event.data?.pluginMessage;
   if (!message) return;
   try {
+  if (typeof message.revisionPending === 'boolean') revisionPending = message.revisionPending;
   if (message.catalogInfo) { $('catalogInfo').textContent = message.catalogInfo; $('catalogInfo').hidden = false; }
   switch (message.type) {
     case 'flowRequest':
@@ -600,6 +648,11 @@ window.addEventListener('message', async event => {
       try { post('reviewDialog', { raw: await requestModel(message.prompt) }); return; }
       catch (error) { status(error.message, true); finishPending(error.message); }
       break;
+    case 'revisionDiscarded':
+      revisionPending = false;
+      lastRequest = lastModelRequest = undefined;
+      status('Оставлен текущий набор без последних правок.');
+      break;
     case 'dialogReply':
       lastRequest = undefined;
       lastModelRequest = undefined;
@@ -621,12 +674,12 @@ window.addEventListener('message', async event => {
       lastModelRequest = undefined;
       stage = 'list';
       componentCount = message.items.length;
-      $('items').replaceChildren();
+      renderProposal(message.items);
       readDraft = undefined;
-      $('planTitle').textContent = 'Согласование компонентов';
+      $('planTitle').textContent = 'Текущий набор компонентов';
       $('revision').value = '';
-      addMessage('componentChat', 'GigaCode', [message.reply, ...message.items.map(item =>
-        componentLine(item))].filter(Boolean).join('\n') || 'Список компонентов пуст.');
+      if (message.changes?.length) addMessage('componentChat', 'GigaCode', 'Применённые изменения:\n' + message.changes.map(change => '• ' + change).join('\n'));
+      else addMessage('componentChat', 'GigaCode', message.reply || 'Набор компонентов показан ниже.');
       $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
       $('plan').hidden = false;
       status(message.items.length ? '' : 'В предложении больше нет компонентов.');

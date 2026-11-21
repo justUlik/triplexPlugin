@@ -169,3 +169,81 @@ test('oversized context reports an error instead of hiding catalog entries', () 
   const {run}=backend();
   assert.throws(()=>run(`withTriplexKnowledge('x'.repeat(47000),[])`),/Компоненты не были скрыты/);
 });
+
+function revisionFixture() {
+  const inserted=[];
+  const frame={id:'frame',type:'FRAME',parent:{id:'page'},width:800,height:600,layoutMode:'VERTICAL',counterAxisSizingMode:'FIXED'};
+  const body={id:'body',name:'BodyPage',type:'FRAME',parent:frame,layoutMode:'VERTICAL',appendChild:n=>inserted.push(n)};
+  const components={};
+  const names=['BodyPage','Island','MaskedField','SuggestField','AmountField','TextField'];
+  for(const [i,name] of names.entries()) components[String(i+1)]={id:'c'+i,type:'COMPONENT',name:'Default',componentPropertyDefinitions:{'Label#1':{type:'TEXT',defaultValue:'Label'}},
+    createInstance(){return {type:'INSTANCE',kind:name,componentProperties:{'Label#1':{type:'TEXT',value:'Label'}},setProperties(v){this.values=v;},setPluginData(){},remove(){this.removed=true;}};}};
+  const app=backend({getNodeById:id=>id==='frame'?frame:id==='body'?body:null,currentPage:{id:'page',selection:[]},importComponentByKeyAsync:async key=>{if(!components[key])throw Error('import unavailable');return components[key];}});
+  app.ctx.fixtureNames=names;
+  app.run(`prepared={frameId:'frame',bodyId:'body',task:'B2B',catalog:fixtureNames.map((name,i)=>({key:String(i+1),type:'COMPONENT',name})),stage:'list'};activeFormId='frame';`);
+  return {...app,inserted,components};
+}
+const initialB2B=[{id:1,text:'Область формы'},{id:2,text:'Форма B2B-push'},{id:3,text:'ИНН'},{id:4,text:'Банк'},{id:5,text:'Сумма'},{id:3,text:'КПП'},{id:3,text:'Расчётный счёт'}];
+async function seedB2B(app) {
+  await app.run(`review(${JSON.stringify(JSON.stringify({items:initialB2B}))})`);
+  app.run(`prepared.revisionPending=true`);
+}
+test('B2B edits replace types, remove containers and feed the corrected set into configuration and insertion', async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Всё заменил',items:[{uid:3,id:6},{uid:4},{uid:5},{uid:6,id:6},{uid:7,id:4}]}))`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.name)')),['TextField','SuggestField','AmountField','TextField','SuggestField']);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.uid)')),[3,4,5,6,7]);
+  assert.equal(app.run('prepared.revisionPending'),false);
+  assert.equal(app.messages.at(-1).changes.length,5);
+  assert.equal(app.messages.at(-1).reply,'');
+  app.run(`publishPreview=(type,item,message)=>send(type,{...message,item:describeItem(item)})`);
+  await app.run('openProperties()');
+  assert.equal(app.messages.at(-1).item.name,'TextField');
+  for(let i=0;i<5;i++) await app.run(`configureItem({index:${i},variant:0,values:{'Label#1':prepared.items[${i}].text}},true)`);
+  assert.equal(app.run('prepared.stage'),'ready');
+  await app.run('apply()');
+  assert.deepEqual(app.inserted.map(n=>n.kind),['TextField','SuggestField','AmountField','TextField','SuggestField']);
+});
+test('prose-only success and unchanged lists cannot advance with the old set',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'reply',reply:'Заменил все поля и убрал BodyPage'}))`),/не передала новый набор/);
+  await assert.rejects(app.run('openProperties()'),/Сначала примените/);
+  await assert.rejects(app.run('apply()'),/завершите правки/);
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил',items:prepared.items.map(i=>({uid:i.uid}))}))`),/прежний набор/);
+  assert.equal(app.run('prepared.items.length'),7);
+  assert.equal(app.run('prepared.revisionPending'),true);
+});
+test('failed replacement import keeps all previous components and their settings',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  delete app.components['6'];
+  const before=app.run('JSON.stringify(prepared.items)');
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил',items:[{uid:3,id:6},{uid:4}]}))`),/import unavailable/);
+  assert.equal(app.run('JSON.stringify(prepared.items)'),before);
+  assert.equal(app.run('prepared.revisionPending'),true);
+});
+test('type replacement works from ready stage and requires confirmation again',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  app.run(`prepared.stage='ready';prepared.items.forEach(i=>i.confirmed=true)`);
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,id:6},{uid:4}]}))`);
+  assert.equal(app.run('prepared.stage'),'list');
+  assert.equal(app.run('prepared.items[0].confirmed'),false);
+  assert.equal(app.run('prepared.items[1].confirmed'),true);
+});
+test('unknown change keys are not silently ignored',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,catalogId:6}]}))`),/неизвестное свойство/);
+  assert.equal(app.run('prepared.items[2].name'),'MaskedField');
+});
+test('proposal is rendered as separate component cards and pending edits disable approval',async()=>{
+  const {get,receive}=ui();
+  await receive({type:'proposal',items:[{text:'ИНН',name:'TextField'},{text:'Расчётный счёт',name:'SuggestField'}],changes:['Заменён ИНН','Заменён счёт'],revisionPending:false});
+  assert.equal(get('items').children.length,2);
+  assert.equal(get('items').children[0].children[0].textContent,'ИНН');
+  assert.equal(get('items').children[0].children[1].textContent,'TextField');
+  assert.equal(get('openProperties').disabled,false);
+  await receive({type:'error',message:'Правки не применены',revisionPending:true});
+  assert.equal(get('openProperties').disabled,true);
+  assert.equal(get('keepCurrent').hidden,false);
+  await receive({type:'revisionDiscarded'});
+  assert.equal(get('openProperties').disabled,false);
+});
