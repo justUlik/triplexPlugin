@@ -1,0 +1,120 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const fs = require('node:fs');
+function backend(extra = {}) {
+  const messages = [];
+  const pixso = { showUI() {}, ui: { postMessage: m => messages.push(m) }, ...extra };
+  const ctx = vm.createContext({ pixso, __html__: '', console });
+  vm.runInContext(fs.readFileSync('main.js', 'utf8'), ctx);
+  return { ctx, messages, run: code => vm.runInContext(code, ctx) };
+}
+test('catalog excludes buttons and retains specialized components beyond four entries', () => {
+  const { run } = backend();
+  const result = run(`formCatalog([
+    ...Array.from({length: 6}, (_, i) => ({key: 's'+i, type: 'COMPONENT', name: 'Select '+i})),
+    {key:'b', type:'COMPONENT', name:'Button'},
+    {key:'ib', type:'COMPONENT', name:'IconButton'},
+    {key:'t', type:'COMPONENT', name:'TextField'},
+    {key:'d', type:'COMPONENT', name:'DatePicker', categories:['TextField']}
+  ])`);
+  assert.equal(result.length, 8);
+  assert.equal(result.find(n => n.key === 'd').use, 'Выбор даты.');
+});
+test('states cannot be requested before layout is locked', () => {
+  const { run } = backend();
+  assert.throws(() => run(`requestFlow({requirements:'task',feedback:'',standard:''})`), /закрепите/);
+});
+test('rejected errors and their variants are not created', () => {
+  const { run } = backend();
+  run(`flow = {states: [
+    {name:'Error',values:{},errors:[{field:'1',text:'A'},{field:'2',text:'B'}],variants:[{field:'1',variant:'error'},{field:'2',variant:'error'}]},
+    {name:'Success',values:{},errors:[]}
+  ]}`);
+  const selected = run(`selectFlow([{included:true,errors:[false,true]},{included:false,errors:[]}])`);
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].errors[0].field, '2');
+  assert.equal(selected[0].variants.length, 1);
+  assert.equal(selected[0].variants[0].field, '2');
+  assert.equal(run(`selectFlow([{included:true,errors:[false,false]},{included:false,errors:[]}]).length`), 0);
+});
+test('locking detects later layout changes and unlock invalidates approval', async () => {
+  const source = {id:'frame',type:'FRAME',parent:{id:'page'},children:[],width:100,height:200,x:0,y:0};
+  const { run, messages } = backend({currentPage:{id:'page'},getNodeById:()=>source});
+  run(`approvedSource = {frameId:'frame'}`);
+  await run(`handleMessage({type:'lockLayout'})`);
+  assert.equal(source.locked, true);
+  assert.equal(messages.at(-1).type, 'layoutLocked');
+  source.width = 110;
+  assert.throws(() => run('lockedSource()'), /изменился/);
+  await run(`handleMessage({type:'unlockLayout'})`);
+  assert.equal(source.locked, false);
+  assert.throws(() => run('lockedSource()'), /закрепите/);
+});
+test('created states preserve frame size, use selected errors, and roll back on failure', async () => {
+  const copies = [];
+  const notes = [];
+  const source = {id:'frame',type:'FRAME',parent:{id:'page'},children:[],width:300,height:400,x:20,y:30,
+    clone() { const node = {...this, setPluginData(){}, resizeWithoutConstraints(w,h){this.width=w;this.height=h;},remove(){this.removed=true;}}; copies.push(node);return node; }};
+  let failFont = false;
+  const { run, messages } = backend({currentPage:{id:'page'},getNodeById:()=>source,
+    loadFontAsync:async()=>{if(failFont)throw Error('font');},
+    createText(){const n={height:20,resize(){},remove(){this.removed=true;}};notes.push(n);return n;}});
+  run(`approvedSource={frameId:'frame'};`);
+  await run(`handleMessage({type:'lockLayout'})`);
+  run(`flow={selected:[{name:'Network',condition:'Offline',values:{},errors:[{field:'',text:'Нет сети'}]}]};flowApproved=true`);
+  await run('createStates()');
+  assert.equal(copies[0].width,300);
+  assert.equal(copies[0].height,400);
+  assert.equal(copies[0].x,368);
+  assert.equal(copies[0].locked,false);
+  assert.match(notes[0].characters,/Нет сети/);
+  assert.equal(messages.at(-1).count,1);
+  assert.equal(run("flowApproved"), false);
+  run("flowApproved = true");
+  failFont=true;
+  await assert.rejects(run('createStates()'),/font/);
+  assert.equal(copies[1].removed,true);
+});
+function ui() {
+  const elements = new Map();
+  function el() { return {hidden:false,value:'',textContent:'',disabled:false,children:[],classList:{toggle(){}},
+    append(...args){this.children.push(...args);},appendChild(n){this.children.push(n);},replaceChildren(...args){this.children=args;},
+    querySelectorAll(){return [];},addEventListener(){},remove(){},setAttribute(){}}; }
+  const get = id => {if(!elements.has(id))elements.set(id,el());return elements.get(id);};
+  get('plan').hidden = true;
+  const events = {};
+  const ctx=vm.createContext({document:{getElementById:get,createElement:el},parent:{postMessage(){}},
+    window:{addEventListener:(name,fn)=>events[name]=fn},setTimeout,clearTimeout,console});
+  vm.runInContext(fs.readFileSync('ui.html','utf8').match(/<script>([\s\S]*)<\/script>/)[1],ctx);
+  return {get,ctx,receive: message => events.message({data:{pluginMessage:message}})};
+}
+test('chat stays hidden during initial request and errors, opens only on successful proposal', async () => {
+  const {get,receive}=ui();
+  get('token').value='test';get('task').value='Форма';
+  get('prepare').onclick();
+  assert.equal(get('plan').hidden,true);
+  await receive({type:'error',message:'Ошибка импорта'});
+  assert.equal(get('plan').hidden,true);
+  await receive({type:'proposal',items:[{text:'Дата',name:'DatePicker'}]});
+  assert.equal(get('plan').hidden,false);
+});
+test('state UI is hidden after insertion until designer locks layout', async () => {
+  const {get,receive}=ui();
+  await receive({type:'applied',count:1,target:'BodyPage'});
+  assert.equal(get('layoutStep').hidden,false);
+  assert.equal(get('scenario').hidden,true);
+  await receive({type:'layoutLocked'});
+  assert.equal(get('scenario').hidden,false);
+  assert.equal(get('unlockLayout').hidden,false);
+});
+
+test('error exclusions survive follow-up proposals', async () => {
+  const {ctx,receive}=ui();
+  const state={name:'Invalid',condition:'Bad format',values:{},errors:[{field:'1',text:'Исправьте формат'}]};
+  await receive({type:'flowProposal',reply:'Ошибки',states:[state]});
+  vm.runInContext(`flowSelection[0].errors[0] = false; flowDecisions.set(JSON.stringify(['1','Исправьте формат']),false)`,ctx);
+  await receive({type:'flowProposal',reply:'Добавлено',states:[state,{name:'Success',condition:'Saved',values:{},errors:[]}]});
+  assert.equal(vm.runInContext('flowSelection[0].errors[0]',ctx),false);
+  assert.equal(vm.runInContext('flowSelection[1].included',ctx),true);
+});

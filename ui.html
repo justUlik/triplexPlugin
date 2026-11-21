@@ -40,7 +40,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 17.11.8</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.1</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -74,13 +74,19 @@
   <button id="apply" hidden class="primary" type="button">Добавить на фрейм</button>
 </section>
 
+<section id="layoutStep" hidden>
+  <p>Расставьте компоненты на фрейме и настройте их размеры. Когда всё готово, закрепите верстку.</p>
+  <button id="lockLayout" type="button">Закрепить верстку</button>
+  <button id="unlockLayout" type="button" hidden>Изменить верстку</button>
+</section>
 <details id="scenario" hidden>
-  <summary>Дополнительно · состояния формы</summary>
+  <summary>Состояния и ошибки</summary>
   <ol id="flowChat" role="log"></ol>
-  <label>Уточнение для сценария <textarea id="feedback" maxlength="2000"></textarea></label>
-  <button id="flowSend" type="button">Предложить состояния</button>
+  <div id="flowChoices"></div>
+  <label>Уточните кейс, чтобы дополнить состояния и ошибки <textarea id="feedback" maxlength="2000"></textarea></label>
+  <button id="flowSend" type="button">Добавить состояния</button>
   <button id="approveFlow" type="button" hidden>Утвердить состояния и ошибки</button>
-  <button id="createStates" type="button" hidden>Создать состояния на фрейме</button>
+  <button id="createStates" type="button" hidden>Создать выбранные состояния рядом с фреймом</button>
 </details>
 <button id="retry" type="button" hidden>Повторить отправку</button>
 
@@ -103,6 +109,10 @@ let stage = 'list';
 let flowApproved = false;
 let hasFlowDraft = false;
 let hasSource = false;
+let layoutLocked = false;
+let flowStates = [];
+let flowSelection = [];
+const flowDecisions = new Map();
 
 function selectedSize() {
   return $('lightboxSize').value;
@@ -121,12 +131,16 @@ function status(text, error = false) {
 
 function setBusy(value) {
   busy = value;
-  for (const id of ['revise', 'revision', 'token', 'standard', 'feedback', 'flowSend', 'createStates']) {
+  for (const id of ['revise', 'revision', 'token', 'standard', 'feedback', 'flowSend', 'createStates', 'lockLayout', 'unlockLayout']) {
     $(id).disabled = value;
   }
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
   $('approveFlow').disabled = value;
-  $('scenario').hidden = stage !== 'done';
+  $('layoutStep').hidden = stage !== 'done';
+  $('lockLayout').hidden = layoutLocked;
+  $('unlockLayout').hidden = !layoutLocked;
+  $('scenario').hidden = stage !== 'done' || !layoutLocked;
+  $('flowChoices').querySelectorAll('button').forEach(button => { button.disabled = value; });
   $('retry').hidden = !lastRequest;
   $('retry').disabled = value;
   $('startForm').hidden = componentCount > 0;
@@ -204,7 +218,7 @@ $('place').onclick = () => {
   post('placeLightbox', { size });
 };
 
-for (const id of ['task', 'token']) {
+for (const id of ['task']) {
   $(id).addEventListener('input', resetPlan);
 }
 
@@ -217,7 +231,6 @@ $('prepare').onclick = () => {
   }
   resetPlan();
   setBusy(true);
-  $('plan').hidden = false;
   addMessage('componentChat', 'Вы', $('task').value.trim());
   showWorking();
   status('Готовлю запрос…');
@@ -282,7 +295,7 @@ for (const id of ['task', 'standard', 'feedback']) {
 $('approveFlow').onclick = () => {
   if (busy || !hasFlowDraft) return;
   setBusy(true);
-  post('approveFlow');
+  post('approveFlow', { selection: flowSelection });
 };
 
 $('flowSend').onclick = () => {
@@ -298,8 +311,70 @@ $('flowSend').onclick = () => {
   addMessage('flowChat', 'Вы', feedback || $('task').value.trim());
   setBusy(true);
   status('GigaCode проектирует сценарий…');
-  post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback });
+  post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback, selection: flowSelection });
 };
+
+function clearFlow() {
+  flowApproved = false;
+  hasFlowDraft = false;
+  flowStates = [];
+  flowSelection = [];
+  flowDecisions.clear();
+  $('flowChoices').replaceChildren();
+  $('flowChat').replaceChildren();
+  $('feedback').value = '';
+}
+
+$('lockLayout').onclick = () => { if (!busy) { setBusy(true); post('lockLayout'); } };
+$('unlockLayout').onclick = () => { if (!busy) { setBusy(true); post('unlockLayout'); } };
+
+function renderFlowChoices(states, labels = {}) {
+  flowStates = states;
+  const stateKey = state => JSON.stringify([state.name, state.condition]);
+  const errorKey = error => JSON.stringify([error.field, error.text]);
+  flowSelection = states.map(state => ({ included: flowDecisions.get(stateKey(state)) ?? true,
+    errors: state.errors.map(error => flowDecisions.get(errorKey(error)) ?? true) }));
+  $('flowChoices').replaceChildren();
+  states.forEach((state, i) => {
+    const card = document.createElement('fieldset');
+    const legend = document.createElement('legend');
+    legend.textContent = state.name;
+    const description = document.createElement('p');
+    description.textContent = state.condition;
+    card.append(legend, description);
+    function toggle(parent, key, read, write, title) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      const refresh = () => {
+        button.textContent = read() ? '+ Берём' : '− Не берём';
+        button.setAttribute('aria-pressed', String(read()));
+        button.setAttribute('aria-label', title + ': ' + button.textContent);
+      };
+      button.onclick = () => {
+        write(!read());
+        flowDecisions.set(key, read());
+        flowApproved = false;
+        post('invalidateFlow');
+        refresh();
+        setBusy(false);
+      };
+      refresh();
+      parent.appendChild(button);
+    }
+    toggle(card, stateKey(state), () => flowSelection[i].included, value => { flowSelection[i].included = value; }, state.name);
+    for (const [j, error] of state.errors.entries()) {
+      const row = document.createElement('p');
+      row.append((labels[error.field] || 'Форма') + ' — ' + error.text + ' ');
+      toggle(row, errorKey(error), () => flowSelection[i].errors[j], value => { flowSelection[i].errors[j] = value; }, error.text);
+      card.appendChild(row);
+    }
+    const details = document.createElement('p');
+    details.className = 'hint';
+    details.textContent = [Object.entries(state.values).map(([id, value]) => (labels[id] || id) + ': ' + value).join(' · '), ...(state.variants || []).map(v => v.variant)].filter(Boolean).join(' · ');
+    card.appendChild(details);
+    $('flowChoices').appendChild(card);
+  });
+}
 
 $('createStates').onclick = () => {
   if (busy) return;
@@ -433,43 +508,6 @@ function renderItem(index, item) {
       card.insertBefore(hint, settings);
     }
   }
-  const errors = document.createElement('fieldset');
-  const legend = document.createElement('legend');
-  legend.textContent = 'Ошибки';
-  const addError = document.createElement('button');
-  addError.type = 'button';
-  addError.textContent = 'Добавить ошибку';
-  const errorRows = new Map();
-  const appendError = (condition = '', message = '') => {
-    const row = document.createElement('div');
-    const when = document.createElement('input');
-    const what = document.createElement('input');
-    for (const [labelText, input, value] of [['Когда показать', when, condition], ['Что написать', what, message]]) {
-      const label = document.createElement('label');
-      label.textContent = labelText;
-      input.value = value;
-      label.appendChild(input);
-      row.appendChild(label);
-    }
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.textContent = 'Удалить ошибку';
-    remove.onclick = () => {
-      errorRows.delete(when);
-      row.remove();
-    };
-    row.appendChild(remove);
-    errorRows.set(when, what);
-    errors.insertBefore(row, addError);
-  };
-  errors.append(legend, addError);
-  for (const line of (item.error || '').split('\n').filter(Boolean)) {
-    const separator = line.indexOf(' — ');
-    if (separator < 0) appendError('', line);
-    else appendError(line.slice(0, separator), line.slice(separator + 3));
-  }
-  addError.onclick = () => appendError();
-  card.appendChild(errors);
   const confirm = document.createElement('button');
   confirm.type = 'button';
   confirm.textContent = 'Подтвердить компонент';
@@ -479,7 +517,7 @@ function renderItem(index, item) {
   refresh.textContent = 'Обновить превью';
   actions.appendChild(refresh);
   card.addEventListener('input', event => {
-    if (event.target === variant || errors.contains(event.target)) return;
+    if (event.target === variant) return;
     clearTimeout(previewTimer);
     previewTimer = setTimeout(() => {
       if (!busy && card.isConnected) post('previewItem', { ...readDraft(), live: true });
@@ -494,8 +532,7 @@ function renderItem(index, item) {
     index, variant: Number(variant.value),
     values: Object.fromEntries(Array.from(fields, ([key, input]) =>
       [key, input.type === 'checkbox' ? input.checked : input.value])),
-    error: Array.from(errorRows, ([when, what]) =>
-      [when.value.trim(), what.value.trim()].filter(Boolean).join(' — ')).filter(Boolean).join('\n')
+    error: ''
   });
   const sendValues = type => {
     clearTimeout(previewTimer);
@@ -506,7 +543,6 @@ function renderItem(index, item) {
   confirm.onclick = () => {
     const details = Array.from(fields, ([key, input]) => key.replace(/#.*$/, '') + ' — ' +
       (input.type === 'checkbox' ? (input.checked ? 'включено' : 'выключено') : input.value));
-    details.push('Ошибки — ' + (readDraft().error || 'без ошибок'));
     addMessage('componentChat', 'Вы', heading.textContent + '\n' + details.join('\n'));
     sendValues('confirmItem');
   };
@@ -531,20 +567,30 @@ window.addEventListener('message', async event => {
     case 'flowProposal':
       $('feedback').value = '';
       hasFlowDraft = message.states.length > 0;
-      addMessage('flowChat', 'GigaCode', [message.reply, ...message.states.map(state => [
-        state.name + ' — ' + state.condition,
-        ...Object.entries(state.values).map(([label, value]) => label + ' — ' + value),
-        ...state.errors.map(error => 'Ошибка ' + (error.field || 'формы') + ' — ' + error.text)
-      ].join('\n'))].join('\n\n'));
+      addMessage('flowChat', 'GigaCode', message.reply);
+      renderFlowChoices(message.states, message.labels);
       status('');
+      break;
+    case 'layoutLocked':
+      layoutLocked = true;
+      clearFlow();
+      $('scenario').open = true;
+      status('Верстка закреплена. Нажмите «Добавить состояния», чтобы впервые предложить состояния и ошибки.');
+      break;
+    case 'layoutUnlocked':
+      layoutLocked = false;
+      clearFlow();
+      status('Измените макет, затем закрепите верстку заново.');
       break;
     case 'flowApproved':
       flowApproved = true;
       status('Состояния и тексты ошибок утверждены.');
       break;
     case 'statesCreated':
+      flowApproved = false;
+      hasFlowDraft = false;
       status('Создано фреймов: ' + message.count + (message.skipped ? ' · Не удалось заполнить значений: ' + message.skipped : '') +
-        (message.errorsPending ? ' · Текстов ошибок для ручного оформления: ' + message.errorsPending : ''));
+        (message.errorsPending ? ' · Ошибок в подписи под фреймом (нет свойства в компоненте): ' + message.errorsPending : ''));
       break;
     case 'dialogRequest':
       lastModelRequest = { prompt: message.prompt, responseType: 'reviewDialog' };
@@ -632,12 +678,15 @@ window.addEventListener('message', async event => {
       break;
     case 'applied':
       hasSource = true;
+      layoutLocked = false;
       stage = 'done';
       addMessage('componentChat', 'Плагин', 'Добавлено компонентов: ' + message.count + ' · ' + message.target);
       status('');
       break;
     case 'formPlaced':
       hasSource = false;
+      layoutLocked = false;
+      clearFlow();
       clearTimeout(placementTimer);
       placementTimer = undefined;
       formPlaced = true;

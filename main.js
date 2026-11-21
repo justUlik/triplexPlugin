@@ -6,7 +6,6 @@ const formFamilies = [
   [/select|dropdown|combobox|выпадающ/i, 'Выбор из выпадающего списка.'],
   [/switch|toggle|переключатель/i, 'Включение или выключение настройки.'],
   [/input|text[ _-]?field|поле ввода/i, 'Ввод текста, числа или контакта.'],
-  [/button|кнопка/i, 'Действие пользователя.']
 ];
 const lightboxKey = 'triplex-lightbox-variants';
 const lightboxSizes = ['SM', 'MD', 'LG', 'XL'];
@@ -21,7 +20,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 17.11.8' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.1' });
 
 function send(type, data) {
   pixso.ui.postMessage({ type, ...data });
@@ -29,96 +28,161 @@ function send(type, data) {
 
 function formCatalog(assets) {
   const candidates = new Map();
-  const familyCounts = new Map();
+
   for (const asset of assets) {
     if (!asset.key || !['COMPONENT', 'COMPONENT_SET'].includes(asset.type)) continue;
     const path = [...new Set([...(asset.categories || []), asset.containerName, asset.name].filter(Boolean))].join(' / ');
-    const family = formFamilies.find(([pattern]) => pattern.test(path));
+    if (/button|кнопк/i.test(path)) continue;
+    const family = formFamilies.find(([pattern]) => pattern.test([asset.containerName, asset.name].filter(Boolean).join(' / '))) ||
+      formFamilies.find(([pattern]) => pattern.test(path));
     if (!family || /(?:^|[ /_-])(?:icon|deprecated|legacy)(?:$|[ /_-])/i.test(path)) continue;
     const [, use] = family;
-    const count = familyCounts.get(use) || 0;
-    if (count >= 4 || candidates.has(asset.key)) continue;
-    familyCounts.set(use, count + 1);
+    if (candidates.has(asset.key)) continue;
     candidates.set(asset.key, { key: asset.key, type: asset.type, name: path.slice(0, 120), use, variants: asset.variants });
   }
   return [...candidates.values()];
 }
 
-function requestFlow({ requirements, feedback, standard }) {
+function sourceFields(source) {
+  const result = [];
+  function visit(node) {
+    if (node.type === 'INSTANCE' && node.getPluginData('triplex-field-id')) result.push(node);
+    else for (const child of node.children || []) visit(child);
+  }
+  visit(source);
+  return result;
+}
+
+function layoutSignature(node) {
+  return JSON.stringify([node.id, node.x, node.y, node.width, node.height, node.layoutMode,
+    node.componentProperties, node.characters, (node.children || []).map(layoutSignature)]);
+}
+
+function lockedSource() {
+  if (!approvedSource?.signature) throw new Error('Сначала расставьте компоненты и закрепите верстку.');
+  const source = getActiveForm(approvedSource.frameId);
+  if (layoutSignature(source) !== approvedSource.signature) throw new Error('Макет изменился. Закрепите верстку повторно и запросите состояния заново.');
+  return source;
+}
+
+function requestFlow({ requirements, feedback, standard, selection }) {
+  const source = lockedSource();
   if (typeof requirements !== 'string' || !requirements.trim()) throw new Error('Вставьте бизнес-требования.');
   if (requirements.length > 12000 || typeof standard !== 'string' || standard.length > 8000 ||
       typeof feedback !== 'string' || feedback.length > 2000) throw new Error('Сократите входной текст.');
   const context = { requirements: requirements.trim(), standard: standard.trim() };
   pendingFlow = context;
   flowApproved = false;
-  const prompt = [
-    'Спроектируй сценарий одной формы по бизнес-требованиям. Отрази порядок шагов, условия веток и сообщения пользователю.',
-    'Если требований не хватает, задай вопросы. Не придумывай бизнес-правила.',
-    'Следуй переданному текстовому стандарту. Значения полей должны быть вымышленными.',
-    'Верни только JSON: {"reply":"Пояснение или вопрос","states":[{"name":"Заполненная форма","condition":"Когда показана","values":{"Название компании":"ООО Ромашка"},"errors":[{"field":"ИНН","text":"Введите ИНН"}]}]}.',
-    'Для ошибки укажи точный видимый текст и подпись поля, либо пустое поле field для общей ошибки формы. Для остальных состояний используй errors: [].',
-    'Дай до 8 состояний после исходного экрана. В values используй точные подписи полей. Для шага без значений верни пустой объект.',
-    JSON.stringify({ ...context, previous: flow?.requirements === context.requirements ? { states: flow.states, reply: flow.reply } : undefined, feedback })
-  ].join('\n');
-  send('flowRequest', { prompt });
+  send('flowRequest', { prompt: [
+    'Предложи состояния и ошибки для уже сверстанной формы. Не меняй состав компонентов.',
+    'Проверь применимость: пустое обязательное поле, формат, диапазон, зависимости полей, недоступные данные, сеть, сервер, загрузка, успех, disabled и read-only. Не ограничивайся одной ошибкой. Неподтвержденные бизнес-правила помечай в condition как гипотезы для согласования; не выдумывай числовые ограничения.',
+    'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
+    'Верни только JSON: {"reply":"Объяснение","states":[{"name":"Название","condition":"Когда показать","values":{"field-id":"значение"},"variants":[{"field":"field-id","variant":"точное имя доступного варианта"}],"errors":[{"field":"field-id или пустая строка для формы","text":"Текст ошибки"}]}]}.',
+    'Дай до 24 релевантных состояний. values, variants и errors могут быть пустыми. Используй только field из fields и варианты из variants. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
+    JSON.stringify({ ...context, fields: sourceFields(source).map(node => ({ field: node.getPluginData('triplex-field-id'),
+      label: node.getPluginData('triplex-field-label'), width: node.width, height: node.height,
+      properties: node.componentProperties, variants: Array.from(node.mainComponent?.parent?.type === 'COMPONENT_SET' ? node.mainComponent.parent.children : []).filter(n => n.type === 'COMPONENT').map(n => n.name) })),
+      previous: flow?.states, selection, feedback })
+  ].join('\n') });
 }
 
 function reviewFlow({ raw }) {
-  if (!pendingFlow || typeof raw !== 'string' || raw.length > 10000) throw new Error('Некорректный ответ GigaCode.');
+  const source = lockedSource();
+  if (!pendingFlow || typeof raw !== 'string' || raw.length > 40000) throw new Error('Некорректный ответ GigaCode.');
   const plan = JSON.parse(raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1'));
-  if (typeof plan?.reply !== 'string' || !Array.isArray(plan.states) || plan.states.length > 8 ||
+  const ids = new Set(sourceFields(source).map(n => n.getPluginData('triplex-field-id')));
+  if (typeof plan?.reply !== 'string' || !Array.isArray(plan.states) || plan.states.length > 24 ||
       plan.states.some(state => typeof state?.name !== 'string' || !state.name.trim() ||
         typeof state.condition !== 'string' || !state.values || typeof state.values !== 'object' ||
-        Array.isArray(state.values) || Object.values(state.values).some(value => typeof value !== 'string') ||
-        !Array.isArray(state.errors) || state.errors.some(error => typeof error?.field !== 'string' ||
-          typeof error.text !== 'string' || !error.text.trim()))) {
-    throw new Error('GigaCode вернул некорректный план сценария.');
-  }
+        Array.isArray(state.values) || Object.entries(state.values).some(([key, value]) => !ids.has(key) || typeof value !== 'string') ||
+        (state.variants !== undefined && (!Array.isArray(state.variants) || state.variants.some(v => !ids.has(v.field) || typeof v.variant !== 'string'))) ||
+        !Array.isArray(state.errors) || state.errors.some(error => typeof error?.field !== 'string' || (error.field && !ids.has(error.field)) ||
+          typeof error.text !== 'string' || !error.text.trim()))) throw new Error('GigaCode вернул некорректный план сценария.');
   flow = { ...pendingFlow, states: plan.states, reply: plan.reply };
   pendingFlow = null;
-  send('flowProposal', { reply: plan.reply, states: plan.states });
+  send('flowProposal', { reply: plan.reply, states: plan.states, labels: Object.fromEntries(sourceFields(source).map(node => [node.getPluginData('triplex-field-id'), node.getPluginData('triplex-field-label')])) });
 }
 
-function createStates() {
-  if (!flowApproved || !flow?.states.length || !approvedSource) throw new Error('Согласуйте сценарий и соберите исходный экран.');
-  const source = getActiveForm(approvedSource.frameId);
-  const path = [];
-  let body = pixso.getNodeById(approvedSource.bodyId);
-  if (!isFormBody(source, body)) throw new Error('Область полей исходного экрана изменилась.');
-  while (body.id !== source.id) {
-    const parent = body.parent;
-    path.unshift(Array.from(parent.children).findIndex(child => child.id === body.id));
-    body = parent;
-  }
+function selectFlow(selection) {
+  if (!Array.isArray(selection) || selection.length !== flow.states.length) throw new Error('Проверьте выбор состояний.');
+  return flow.states.flatMap((state, i) => {
+    const choice = selection[i];
+    if (typeof choice?.included !== 'boolean' || !Array.isArray(choice.errors) || choice.errors.length !== state.errors.length || choice.errors.some(v => typeof v !== 'boolean')) throw new Error('Проверьте выбор ошибок.');
+    if (!choice.included) return [];
+    const errors = state.errors.filter((_, j) => choice.errors[j]);
+    // A rejected error must not leave its error variant in the generated screen.
+    if (state.errors.length && !errors.length) return [];
+    const rejected = new Set(state.errors.filter((_, j) => !choice.errors[j]).map(e => e.field));
+    return [{ ...state, errors, variants: (state.variants || []).filter(v => !rejected.has(v.field)) }];
+  });
+}
+
+async function createStates() {
+  const source = lockedSource();
+  if (!flowApproved || !flow?.selected?.length) throw new Error('Выберите и утвердите состояния и ошибки.');
   const copies = [];
+  const notes = [];
   let skipped = 0;
   let errorsPending = 0;
   try {
-    for (const [index, state] of flow.states.entries()) {
+    for (const [index, state] of flow.selected.entries()) {
       const copy = source.clone();
       copies.push(copy);
+      copy.locked = false;
       copy.name = String(index + 2).padStart(2, '0') + ' · ' + state.name;
       copy.x = source.x + (index + 1) * (source.width + 48);
       copy.y = source.y;
-      if (state.errors.length) {
-        copy.setPluginData('triplex-flow-errors', JSON.stringify(state.errors));
-        errorsPending += state.errors.length;
+      const fields = new Map(sourceFields(copy).map(n => [n.getPluginData('triplex-field-id'), n]));
+      const sizes = [...fields.values()].map(n => [n, n.width, n.height]);
+      for (const choice of state.variants || []) {
+        const field = fields.get(choice.field);
+        const current = field?.mainComponent;
+        const variant = current?.parent?.type === 'COMPONENT_SET' && current.parent.children.find(n => n.type === 'COMPONENT' && n.name === choice.variant);
+        if (!variant || typeof field.swapComponent !== 'function') throw new Error('Недоступен вариант «' + choice.variant + '». Уточните состояние в чате.');
+        const values = field.componentProperties || {};
+        field.swapComponent(variant);
+        const compatible = Object.fromEntries(Object.entries(values).filter(([key, prop]) => ['TEXT', 'BOOLEAN'].includes(prop.type) && field.componentProperties?.[key]?.type === prop.type).map(([key, prop]) => [key, prop.value]));
+        if (Object.keys(compatible).length) field.setProperties(compatible);
       }
-      const target = path.reduce((node, i) => node.children[i], copy);
-      for (const [label, value] of Object.entries(state.values)) {
-        const field = Array.from(target.children).find(node => node.type === 'INSTANCE' &&
-          (node.name === label || Object.entries(node.componentProperties || {}).some(([key, prop]) =>
-            /^(?:label|caption|title|заголовок|подпись)(?:#|$)/i.test(key) && prop.value === label)));
-        const key = Object.entries(field?.componentProperties || {}).find(([name, prop]) =>
-          /^(?:value|значение)(?:#|$)/i.test(name) && prop.type === 'TEXT')?.[0];
+      for (const [id, value] of Object.entries(state.values)) {
+        const field = fields.get(id);
+        const key = Object.entries(field?.componentProperties || {}).find(([name, prop]) => /^(?:value|input[ _-]?value|значение)(?:#|$)/i.test(name) && prop.type === 'TEXT')?.[0];
         if (key) field.setProperties({ [key]: value });
         else skipped++;
       }
+      const annotations = [state.condition];
+      for (const error of state.errors) {
+        const field = fields.get(error.field);
+        const props = Object.entries(field?.componentProperties || {});
+        const key = props.find(([name, prop]) => /error|validation|ошиб/i.test(name) && prop.type === 'TEXT')?.[0];
+        if (key) {
+          const values = { [key]: error.text };
+          for (const [name, prop] of props) if (prop.type === 'BOOLEAN' && /error|ошиб/i.test(name)) values[name] = true;
+          field.setProperties(values);
+        } else errorsPending++;
+        annotations.push((field?.getPluginData('triplex-field-label') || 'Форма') + ' — ' + error.text);
+      }
+      for (const [node, width, height] of sizes) node.resizeWithoutConstraints(width, height);
+      copy.resizeWithoutConstraints(source.width, source.height);
+      copy.setPluginData('triplex-flow-errors', JSON.stringify(state.errors));
+      await pixso.loadFontAsync({ family: 'Inter', style: 'Regular' });
+      const note = pixso.createText();
+      notes.push(note);
+      note.fontName = { family: 'Inter', style: 'Regular' };
+      note.fontSize = 14;
+      note.characters = annotations.join('\n');
+      note.resize(copy.width, note.height);
+      note.textAutoResize = 'HEIGHT';
+      note.x = copy.x;
+      note.y = copy.y + copy.height + 16;
+      note.name = 'Условия и ошибки · ' + state.name;
+      lockedSource();
     }
   } catch (error) {
-    for (const copy of copies) copy.remove();
+    for (const node of [...copies, ...notes]) node.remove();
     throw error;
   }
+  flowApproved = false;
   send('statesCreated', { count: copies.length, skipped, errorsPending });
 }
 
@@ -153,7 +217,8 @@ function sendPlanRequest(revision) {
     'Следуй textStandard для всех подписей и подсказок. Сохраняй термины бизнес-требований.',
     'Для заполняемых полей предложи вымышленное значение value по задаче. Плейсхолдер и значение — разные свойства. Если нужен пустой экран или компонент не принимает текстовое значение, пропусти value.',
     'Для текстовых полей предложи короткую подсказку по задаче. Используй точный плейсхолдер, если пользователь его указал. Для кнопок и чекбоксов пропусти placeholder.',
-    'В error перечисли известные ошибки, по одной строке «условие — сообщение». Если правил нет, оставь пустую строку.',
+    'Не предлагай кнопки, ошибки и состояния: они согласуются отдельно после верстки. error всегда пустой.',
+    'Выбирай тип по смыслу: дата — DatePicker, несколько строк — TextArea, фиксированные варианты — Select или Radio, согласие — Checkbox, настройка — Switch. TextField только для свободного однострочного ввода. Если подходящего типа нет, объясни нехватку каталога, не заменяй всё TextField. В reply объясни выбор типов и ограничения каталога.',
     'Для поля только для чтения укажи readOnly: true. Для списка кошельков укажи в optionExample короткий вымышленный пример пункта с именем, ID и балансом.',
     'Если есть revision, отредактируй текущий список по этим правкам и верни весь новый список. Сохрани позиции, которые пользователь не просил менять.',
     JSON.stringify({
@@ -193,7 +258,7 @@ async function review(raw) {
     if (value != null && (typeof value !== 'string' || value.length > 120 || /[\r\n]/.test(value))) {
       throw new Error('GigaCode вернул некорректное моковое значение.');
     }
-    return { id: item.id, text: item.text.trim(), placeholder: placeholder?.trim(), value: value?.trim(), readOnly: item.readOnly === true, optionExample: typeof item.optionExample === 'string' ? item.optionExample.slice(0, 240) : '', error: typeof item.error === 'string' ? item.error.slice(0, 3000) : '' };
+    return { id: item.id, text: item.text.trim(), placeholder: placeholder?.trim(), value: value?.trim(), readOnly: item.readOnly === true, optionExample: typeof item.optionExample === 'string' ? item.optionExample.slice(0, 240) : '', error: '' };
   });
   const parts = new Map();
   for (const id of new Set(items.map(item => item.id))) {
@@ -260,7 +325,7 @@ function requestConversation({ revision }) {
     'list — изменение состава или порядка. items — весь новый порядок: {"uid":1} сохраняет существующий компонент со всеми настройками, {"id":1,"text":"Подпись","placeholder":"","value":"","readOnly":false} добавляет из каталога.',
     'uid — уникальный номер уже добавленного поля из components. catalogId/id — тип из каталога. Несколько Text Field могут иметь один catalogId, но разные uid. Копируй uid из components, не используй порядковый номер или catalogId вместо него. Каждый uid в items встречается один раз. Для нового поля передавай только id без uid.',
     'При list можно также передать updates для существующих компонентов. Сохраняй все незатронутые решения. Если выполнить просьбу по доступным свойствам нельзя, объясни это в reply.',
-    'Для кошелька учитывай имя, ID и баланс. Не придумывай бизнес-правила. Условия ошибок записывай отдельными строками «условие — сообщение».',
+    'Кнопки запрещены. Не предлагай ошибки и состояния до закрепления верстки. Выбирай специализированные компоненты по смыслу, не заменяй выбор, даты и переключатели TextField. По вопросу о TextField объясни выбор на основе переданного каталога.',
     JSON.stringify({ conversation, task: prepared.task, standard: prepared.standard, stage: prepared.stage, components, variantsByCatalogId: definitions,
       catalog: prepared.catalog.map((item, index) => ({ id: index + 1, name: item.name, use: item.use })) })
   ].join('\n') });
@@ -331,7 +396,7 @@ async function reviewConversation(raw) {
     }
     if (change.error !== undefined) {
       if (typeof change.error !== 'string' || change.error.length > 3000) throw new Error('Некорректные ошибки.');
-      candidate.error = change.error;
+      candidate.error = '';
     }
     updated.set(change.uid, candidate);
   }
@@ -393,7 +458,7 @@ function requestCopy(revision = '') {
   const description = describeItem(item);
   send('copyRequest', { prompt: [
     'Согласуй тексты одного компонента. Следуй текстовому стандарту.',
-    'Учитывай выбранные свойства. Укажи каждое возможное состояние ошибки отдельной строкой в error в формате «условие — текст». Используй только известные правила проверки. Если ошибок нет, верни пустую строку.',
+    'Учитывай выбранные свойства. Ошибки и состояния пока не предлагай; error оставь пустым.',
     'Верни только JSON: {"reply":"Пояснение или вопрос","text":"Подпись","placeholder":"","value":"","texts":{},"error":""}. Заполни texts согласованными текстами по точным ключам TEXT из component.fields. Для незаполняемых свойств не добавляй ключи.',
     'Если есть revision, внеси только запрошенные изменения.',
     JSON.stringify({ task: prepared.task, requirements: flow?.requirements, standard: prepared.standard,
@@ -413,7 +478,7 @@ async function reviewCopy(raw) {
   const texts = Object.fromEntries(Object.entries(entry.texts || {}).filter(([key, value]) =>
     describeItem(current).fields.some(field => field.key === key && field.type === 'TEXT') && typeof value === 'string' && value.length <= 3000));
   const item = { ...current, texts, text: entry.text, placeholder: entry.placeholder, value: entry.value,
-    error: entry.error || '', confirmed: false };
+    error: '', confirmed: false };
   const preview = publishPreview('copyOpened', item, { index, total: items.length, reply: entry.reply }, true);
   item.values = { ...current.values, ...Object.fromEntries(preview.fields
     .filter(field => field.type === 'TEXT' && field.value != null).map(field => [field.key, field.value])) };
@@ -658,6 +723,7 @@ async function placeLightbox(size) {
   }
   activeFormId = frame.id;
   approvedSource = null;
+  flow = null; pendingFlow = null; flowApproved = false;
   activeLibraryAssets = match.libraryAssets;
   activeLightboxComponent = component;
   prepared = null;
@@ -783,7 +849,8 @@ async function insert(parent, item) {
   try {
     parent.appendChild(instance);
     await setInstanceValues(instance, item.values, item.name);
-    if (item.error) instance.setPluginData('triplex-field-error', item.error);
+    instance.setPluginData('triplex-field-id', String(item.uid));
+    instance.setPluginData('triplex-field-label', item.text);
     return instance;
   } catch (error) {
     if (!instance.removed) instance.remove();
@@ -820,6 +887,9 @@ async function apply() {
   prepared = null;
   pixso.currentPage.selection = [body];
   approvedSource = { frameId: frame.id, bodyId: body.id };
+  flow = null;
+  pendingFlow = null;
+  flowApproved = false;
   send('applied', { count: inserted.length, target: body.name });
 }
 
@@ -834,6 +904,24 @@ async function handleMessage(message) {
       case 'init':
         send('ready', { lightboxSizes });
         break;
+      case 'lockLayout': {
+        if (!approvedSource) throw new Error('Сначала добавьте компоненты на фрейм.');
+        const source = getActiveForm(approvedSource.frameId);
+        approvedSource.signature = layoutSignature(source);
+        source.locked = true;
+        flow = null; pendingFlow = null; flowApproved = false;
+        send('layoutLocked');
+        break;
+      }
+      case 'unlockLayout': {
+        if (approvedSource) {
+          getActiveForm(approvedSource.frameId).locked = false;
+          delete approvedSource.signature;
+        }
+        flow = null; pendingFlow = null; flowApproved = false;
+        send('layoutUnlocked');
+        break;
+      }
       case 'requestFlow':
         requestFlow(message);
         break;
@@ -846,11 +934,14 @@ async function handleMessage(message) {
         break;
       case 'approveFlow':
         if (pendingFlow || !flow?.states.length) throw new Error('Сначала получите список состояний для утверждения.');
+        lockedSource();
+        flow.selected = selectFlow(message.selection);
+        if (!flow.selected.length) throw new Error('Выберите хотя бы одно состояние или ошибку.');
         flowApproved = true;
         send('flowApproved');
         break;
       case 'createStates':
-        createStates();
+        await createStates();
         break;
       case 'prepare':
         prepared = null;
