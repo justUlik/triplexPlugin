@@ -231,7 +231,7 @@ test('type replacement works from ready stage and requires confirmation again',a
 });
 test('unknown change keys are not silently ignored',async()=>{
   const app=revisionFixture();await seedB2B(app);
-  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,catalogId:6}]}))`),/неизвестное свойство/);
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,unknownReplacement:6}]}))`),/unknownReplacement/);
   assert.equal(app.run('prepared.items[2].name'),'MaskedField');
 });
 test('proposal is rendered as separate component cards and pending edits disable approval',async()=>{
@@ -286,4 +286,51 @@ test('invalid objects and long labels are diagnosed, never silently truncated',(
   assert.throws(()=>run(`normalizeModelLabel({id:1,text:{value:'ИНН'}},2)`),/Компонент №3.*строкой/);
   assert.throws(()=>run(`normalizeModelLabel({id:1,text:'а'.repeat(121)},0)`),/121 символов/);
   assert.throws(()=>run(`normalizeModelLabel({id:1,name:'TextField'},0)`),/не передала подпись/);
+});
+
+test('catalogId alias and echoed metadata apply B2B replacement and removal',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[
+    {uid:1,remove:true,name:'BodyPage'}, {uid:2,action:'delete',reason:'Не нужен'},
+    {uid:'3',catalogId:'6',name:'MaskedField',confirmed:true,reason:'Свободный ввод'},
+    {uid:4,name:'SuggestField'}, {uid:5,doc:'AmountField'},
+    {uid:6,componentId:6,explanation:'Без маски'}, {uid:7,id:4,catalogId:'4'}]}))`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.name)')),['TextField','SuggestField','AmountField','TextField','SuggestField']);
+  assert.equal(app.run('prepared.items[0].confirmed'),false);
+  assert.equal(app.run('prepared.items[0].reason'),undefined);
+  assert.equal(app.run('prepared.revisionPending'),false);
+});
+test('structural updates expand into a complete list without removing untouched items',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await app.run(`reviewConversation(JSON.stringify({action:'configure',reply:'Готово',updates:[{uid:1,remove:true},{uid:2,operation:'remove'},{uid:3,catalogId:6},{uid:6,componentId:6},{uid:7,id:4}]}))`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.uid)')),[3,4,5,6,7]);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.name)')),['TextField','SuggestField','AmountField','TextField','SuggestField']);
+});
+test('conflicting ids reject the whole edit rather than choosing a type arbitrarily',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  const before=app.run('JSON.stringify(prepared.items)');
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,id:6,catalogId:4}]}))`),/Противоречивые значения/);
+  assert.equal(app.run('JSON.stringify(prepared.items)'),before);
+});
+test('unknown operation gets one automatic repair and preserves the previous set',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  const before=app.run('JSON.stringify(prepared.items)');
+  const raw=JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,replaceWith:6}]});
+  app.ctx.badRevision=raw;
+  await app.run(`handleMessage({type:'reviewDialog',raw:badRevision})`);
+  assert.equal(app.messages.at(-1).type,'dialogRequest');
+  assert.equal(app.messages.at(-1).repairing,true);
+  assert.equal(app.run('JSON.stringify(prepared.items)'),before);
+  await app.run(`handleMessage({type:'reviewDialog',raw:badRevision})`);
+  assert.equal(app.messages.at(-1).type,'error');
+  assert.match(app.messages.at(-1).message,/replaceWith/);
+  assert.equal(app.run('prepared.revisionPending'),true);
+});
+test('corrected structural edit after format repair applies successfully',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await app.run(`handleMessage({type:'reviewDialog',raw:JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,replaceWith:6}]})})`);
+  await app.run(`handleMessage({type:'reviewDialog',raw:JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,id:6}]})})`);
+  assert.equal(app.messages.at(-1).type,'proposal');
+  assert.equal(app.run('prepared.items.length'),1);
+  assert.equal(app.run('prepared.items[0].name'),'TextField');
 });

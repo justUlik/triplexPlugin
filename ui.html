@@ -43,7 +43,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.4</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.5</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -644,7 +644,7 @@ window.addEventListener('message', async event => {
         (message.errorsPending ? ' · Ошибок в подписи под фреймом (нет свойства в компоненте): ' + message.errorsPending : ''));
       break;
     case 'dialogRequest':
-      if (message.repairing) status('Исправляю формат подписей в ответе GigaCode…');
+      if (message.repairing) status('Исправляю формат ответа GigaCode…');
       lastModelRequest = { prompt: message.prompt, responseType: 'reviewDialog' };
       try { post('reviewDialog', { raw: await requestModel(message.prompt) }); return; }
       catch (error) { status(error.message, true); finishPending(error.message); }
@@ -661,7 +661,7 @@ window.addEventListener('message', async event => {
       break;
     case 'prepared':
       lastModelRequest = { prompt: message.prompt, responseType: 'review' };
-      status(message.repairing ? 'Исправляю формат подписей в ответе GigaCode…' : 'GigaCode подбирает компоненты…');
+      status(message.repairing ? 'Исправляю формат ответа GigaCode…' : 'GigaCode подбирает компоненты…');
       try {
         post('review', { raw: await requestModel(message.prompt) });
         return;

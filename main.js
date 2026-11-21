@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.4' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.5' });
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {
@@ -1442,12 +1442,13 @@ function normalizeModelLabel(item, index, previous) {
 }
 
 function requestLabelRepair(message, error) {
-  if (error.code !== 'MODEL_LABEL' || !prepared || !['review', 'reviewDialog'].includes(message.type) || prepared.labelRepairAttempted) return false;
+  if (!['MODEL_LABEL', 'MODEL_REVISION'].includes(error.code) || !prepared || !['review', 'reviewDialog'].includes(message.type) || prepared.labelRepairAttempted) return false;
   prepared.labelRepairAttempted = true;
   const dialog = message.type === 'reviewDialog';
   const prompt = [
     'Исправь формат своего ответа. Не меняй смысл задачи и ранее согласованные решения.',
     'Ошибка проверки: ' + error.message,
+    'Используй только uid,id,text,placeholder,value,readOnly,optionExample,values,variant. catalogId/componentId означают id типа. name/confirmed/reason — метаданные, их можно опустить. Для удаления исключи uid из итогового items. Не отменяй правки пользователя.',
     'У каждой новой строки items обязательны id и непустой text: видимая подпись до 120 символов. Не передавай объект вместо строки. Для существующей строки с uid можно пропустить text, тогда сохранится прежняя подпись.',
     dialog ? 'Верни JSON с action:list, reply и полным итоговым items с учётом последних правок пользователя. Для замены типа передай uid и новый id.' : 'Верни JSON с reply и полным items: [{id:1,text:"Подпись",placeholder:""}].',
     JSON.stringify({ task: prepared.task, standard: prepared.standard, conversation,
@@ -1532,7 +1533,7 @@ function requestConversation({ revision }) {
   const definitions = {};
   const components = prepared.items.map(item => {
     const result = {
-      uid: item.uid, catalogId: item.id, name: item.name, text: item.text, placeholder: item.placeholder,
+      uid: item.uid, id: item.id, name: item.name, text: item.text, placeholder: item.placeholder,
       value: item.value, readOnly: item.readOnly, error: item.error,
       optionExample: item.optionExample, confirmed: item.confirmed
     };
@@ -1578,6 +1579,57 @@ function revisionSummary(before, after) {
   return changes;
 }
 
+function revisionFormatError(message) {
+  const error = new Error(message);
+  error.code = 'MODEL_REVISION';
+  return error;
+}
+
+function normalizeRevisionEntry(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw revisionFormatError('Строка правок должна быть объектом.');
+  const result = {};
+  const aliases = { catalogId: 'id', componentId: 'id' };
+  // These are descriptive fields sent to the model, not editable settings.
+  const metadata = new Set(['name', 'confirmed', 'reason', 'explanation', 'knowledgeName', 'doc', 'fields', 'variants', 'copy', 'missing']);
+  const editable = new Set(['uid','id','text','label','title','placeholder','value','readOnly','optionExample','values','variant','error','remove']);
+  for (const [source, value] of Object.entries(entry)) {
+    if (metadata.has(source)) continue;
+    if (source === 'action' || source === 'operation') {
+      if (['remove','delete'].includes(value)) {
+        if (result.remove === false) throw revisionFormatError('Противоречивое указание удаления компонента.');
+        result.remove = true;
+      } else if (!['keep','replace','add','update'].includes(value)) throw revisionFormatError('Неизвестная операция над компонентом: ' + String(value));
+      continue;
+    }
+    const key = aliases[source] || source;
+    if (!editable.has(key)) throw revisionFormatError('Не удалось разобрать свойство «' + source + '» в правках компонента.');
+    const normalized = ['uid','id','variant'].includes(key) && typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value.trim()) : value;
+    if (Object.prototype.hasOwnProperty.call(result, key) && result[key] !== normalized) throw revisionFormatError('Противоречивые значения «' + key + '» в правках компонента.');
+    result[key] = normalized;
+  }
+  if (result.remove !== undefined && typeof result.remove !== 'boolean') throw revisionFormatError('Признак remove должен быть true или false.');
+  return result;
+}
+
+function normalizeRevisionResponse(response, currentItems) {
+  if (response.updates !== undefined) {
+    if (!Array.isArray(response.updates)) throw revisionFormatError('updates должен быть списком правок.');
+    response.updates = response.updates.map(normalizeRevisionEntry);
+  }
+  if (response.items !== undefined) {
+    if (!Array.isArray(response.items)) throw revisionFormatError('items должен быть итоговым списком.');
+    response.items = response.items.map(normalizeRevisionEntry);
+  }
+  // A structural patch is also valid: expand it to the complete authoritative list.
+  if (response.action === 'configure' && response.updates?.some(change => change.id !== undefined || change.remove === true)) {
+    if (response.items?.length) throw revisionFormatError('Переданы одновременно структурные updates и непустой items. Нужен один итоговый список.');
+    response.action = 'list';
+    response.items = currentItems.map(item => ({ uid: item.uid }));
+  }
+  return response;
+}
+
+
 async function reviewListRevision(response) {
   const context = prepared;
   if (response.action === 'reply' && response.needsClarification === true && !response.items?.length && !response.updates?.length) {
@@ -1598,7 +1650,6 @@ async function reviewListRevision(response) {
     if (!existing.has(uid) || changes.has(uid)) throw new Error('Некорректный uid в изменениях.');
     changes.set(uid, change);
   }
-  const allowed = new Set(['uid', 'id', 'label', 'title', 'text', 'placeholder', 'value', 'readOnly', 'optionExample', 'values', 'variant', 'error']);
   const rows = response.items.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Некорректная строка нового набора.');
     const uid = entry.uid === undefined ? undefined : normalize(entry.uid);
@@ -1606,7 +1657,11 @@ async function reviewListRevision(response) {
     if (uid !== undefined && (!previous || seen.has(uid))) throw new Error('Неизвестный или повторяющийся uid в новом наборе.');
     if (uid !== undefined) seen.add(uid);
     const patch = { ...changes.get(uid), ...entry };
-    if (Object.keys(patch).some(key => !allowed.has(key))) throw new Error('Ответ содержит неизвестное свойство. Для замены типа нужен id из каталога.');
+    if (patch.remove === true) {
+      if (!previous) throw revisionFormatError('Для удаления нужен uid существующего компонента.');
+      return { remove: true };
+    }
+    delete patch.remove;
     const id = patch.id === undefined ? previous?.id : normalize(patch.id);
     if (!Number.isInteger(id) || !context.catalog[id - 1]) throw new Error('Тип компонента отсутствует в каталоге.');
     const text = normalizeModelLabel(patch, index, previous);
@@ -1619,7 +1674,7 @@ async function reviewListRevision(response) {
     }
     if (spec.readOnly !== undefined && typeof spec.readOnly !== 'boolean') throw new Error('Некорректный read-only.');
     return { previous, patch, spec, replace: !previous || previous.id !== id };
-  });
+  }).filter(row => !row.remove);
   for (const uid of changes.keys()) if (!seen.has(uid)) throw new Error('Изменение ссылается на удалённый компонент.');
   // Import into a temporary plan. Never partially replace the authoritative set.
   const imports = rows.filter(row => row.replace);
@@ -1695,6 +1750,7 @@ async function reviewConversation(raw) {
   }
   const context = prepared;
   if (!context?.items) throw new Error('Сначала запросите компоненты.');
+  normalizeRevisionResponse(response, context.items);
   if (context.stage === 'list' || response.action === 'list') return reviewListRevision(response);
   if (response.action === 'reply') {
     if (response.needsClarification !== true) throw new Error('Ответ не содержит применимых изменений. Уточните запрос.');
