@@ -334,3 +334,31 @@ test('corrected structural edit after format repair applies successfully',async(
   assert.equal(app.run('prepared.items.length'),1);
   assert.equal(app.run('prepared.items[0].name'),'TextField');
 });
+
+test('states first show proposal action; clarification appears only after successful response',async()=>{
+  const {get,receive,ctx}=ui();
+  await receive({type:'applied',count:1,target:'BodyPage'});
+  await receive({type:'layoutLocked'});
+  assert.equal(get('flowFeedback').hidden,true);
+  assert.equal(get('flowIntro').hidden,false);
+  assert.equal(get('flowSend').textContent,'Предложить состояния и ошибки');
+  await receive({type:'error',message:'Модель недоступна'});
+  assert.equal(get('flowFeedback').hidden,true);
+  await receive({type:'flowProposal',reply:'Предлагаю проверить формат',states:[{name:'Ошибка',condition:'Неверный формат',values:{},errors:[{field:'1',text:'Проверьте формат'}]}]});
+  assert.equal(get('flowFeedback').hidden,false);
+  assert.equal(get('flowIntro').hidden,true);
+  assert.equal(get('flowSend').textContent,'Дополнить предложения');
+  vm.runInContext('hasFlowDraft=false; setBusy(true)',ctx);
+  assert.equal(get('flowFeedback').hidden,false);
+  await receive({type:'error',message:'Ошибка дополнения'});
+  assert.equal(get('flowFeedback').hidden,false);
+});
+test('unlocking and relocking layout resets the first-proposal step',async()=>{
+  const {get,receive}=ui();
+  await receive({type:'flowProposal',reply:'Уточните условия',states:[]});
+  assert.equal(get('flowFeedback').hidden,false);
+  await receive({type:'layoutUnlocked'});
+  await receive({type:'layoutLocked'});
+  assert.equal(get('flowFeedback').hidden,true);
+  assert.equal(get('flowSend').textContent,'Предложить состояния и ошибки');
+});

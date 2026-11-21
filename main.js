@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.5' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.6' });
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {

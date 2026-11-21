@@ -43,7 +43,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.5</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.6</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -88,8 +88,9 @@
   <summary>Состояния и ошибки</summary>
   <ol id="flowChat" role="log"></ol>
   <div id="flowChoices"></div>
-  <label>Уточните кейс, чтобы дополнить состояния и ошибки <textarea id="feedback" maxlength="2000"></textarea></label>
-  <button id="flowSend" type="button">Добавить состояния</button>
+  <p id="flowIntro" class="hint">Сначала GigaCode предложит состояния и ошибки по вашей задаче и собранному экрану. Затем можно будет выбрать варианты и дополнить кейс.</p>
+  <label id="flowFeedback" hidden>Уточните кейс, чтобы дополнить состояния и ошибки <textarea id="feedback" maxlength="2000" placeholder="Например, добавь ошибки для перевода на закрытый счёт"></textarea></label>
+  <button id="flowSend" type="button">Предложить состояния и ошибки</button>
   <button id="approveFlow" type="button" hidden>Утвердить состояния и ошибки</button>
   <button id="createStates" type="button" hidden>Создать выбранные состояния рядом с фреймом</button>
 </details>
@@ -114,6 +115,7 @@ let stage = 'list';
 let revisionPending = false;
 let flowApproved = false;
 let hasFlowDraft = false;
+let hasFlowResponse = false;
 let hasSource = false;
 let layoutLocked = false;
 let flowStates = [];
@@ -140,6 +142,9 @@ function setBusy(value) {
   for (const id of ['revise', 'revision', 'token', 'standard', 'feedback', 'flowSend', 'createStates', 'lockLayout', 'unlockLayout']) {
     $(id).disabled = value;
   }
+  $('flowFeedback').hidden = !hasFlowResponse;
+  $('flowIntro').hidden = hasFlowResponse;
+  $('flowSend').textContent = hasFlowResponse ? 'Дополнить предложения' : 'Предложить состояния и ошибки';
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
   $('approveFlow').disabled = value;
   $('layoutStep').hidden = stage !== 'done';
@@ -175,6 +180,7 @@ function resetPlan() {
   componentCount = 0;
   flowApproved = false;
   hasFlowDraft = false;
+  hasFlowResponse = false;
   $('flowChat').replaceChildren();
   $('feedback').value = '';
   $('scenario').open = false;
@@ -354,16 +360,17 @@ $('flowSend').onclick = () => {
     status('Введите код подключения из терминала.');
     return;
   }
-  const feedback = $('feedback').value.trim();
+  const feedback = hasFlowResponse ? $('feedback').value.trim() : '';
   flowApproved = false;
   hasFlowDraft = false;
   addMessage('flowChat', 'Вы', feedback || $('task').value.trim());
   setBusy(true);
-  status('GigaCode проектирует сценарий…');
+  status(hasFlowResponse ? 'GigaCode дополняет состояния и ошибки…' : 'GigaCode предлагает состояния и ошибки…');
   post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback, selection: flowSelection });
 };
 
 function clearFlow() {
+  hasFlowResponse = false;
   flowApproved = false;
   hasFlowDraft = false;
   flowStates = [];
@@ -616,6 +623,7 @@ window.addEventListener('message', async event => {
       }
       break;
     case 'flowProposal':
+      hasFlowResponse = true;
       $('feedback').value = '';
       hasFlowDraft = message.states.length > 0;
       addMessage('flowChat', 'GigaCode', message.reply);
@@ -626,7 +634,7 @@ window.addEventListener('message', async event => {
       layoutLocked = true;
       clearFlow();
       $('scenario').open = true;
-      status('Верстка закреплена. Нажмите «Добавить состояния», чтобы впервые предложить состояния и ошибки.');
+      status('Верстка закреплена. Нажмите «Предложить состояния и ошибки». GigaCode сначала подготовит свои варианты.');
       break;
     case 'layoutUnlocked':
       layoutLocked = false;
