@@ -247,3 +247,43 @@ test('proposal is rendered as separate component cards and pending edits disable
   await receive({type:'revisionDiscarded'});
   assert.equal(get('openProperties').disabled,false);
 });
+
+test('initial labels accept label/title aliases and normalize line breaks',async()=>{
+  const app=revisionFixture();
+  await app.run(`review(JSON.stringify({items:[{id:6,label:'  ИНН\\n плательщика  '},{id:4,title:'Банк плательщика'},{id:3,text:'КПП\\\\nфилиала'}]}))`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.text)')),['ИНН плательщика','Банк плательщика','КПП филиала']);
+});
+test('replacement preserves previous label when new label is empty or null',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,id:6,text:null},{uid:6,id:6,text:''},{uid:7,id:4}]}))`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.text)')),['ИНН','КПП','Расчётный счёт']);
+});
+test('label alias in revision updates the actual visible Label property',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,label:'ИНН\\nорганизации'}]}))`);
+  assert.equal(app.run('prepared.items[0].text'),'ИНН организации');
+  assert.equal(app.run(`describeItem(prepared.items[0]).fields.find(f=>f.key==='Label#1').value`),'ИНН организации');
+});
+test('missing label triggers one repair request, then an actionable error',async()=>{
+  const app=revisionFixture();
+  await app.run(`handleMessage({type:'review',raw:JSON.stringify({items:[{id:6}]})})`);
+  assert.equal(app.messages.at(-1).type,'prepared');
+  assert.equal(app.messages.at(-1).repairing,true);
+  await app.run(`handleMessage({type:'review',raw:JSON.stringify({items:[{id:6}]})})`);
+  assert.equal(app.messages.at(-1).type,'error');
+  assert.match(app.messages.at(-1).message,/Компонент №1.*не передала подпись/);
+  assert.equal(app.run('prepared.items'),undefined);
+});
+test('corrected model response completes after automatic label repair',async()=>{
+  const app=revisionFixture();
+  await app.run(`handleMessage({type:'review',raw:JSON.stringify({items:[{id:6}]})})`);
+  await app.run(`handleMessage({type:'review',raw:JSON.stringify({items:[{id:6,text:'ИНН'}]})})`);
+  assert.equal(app.messages.at(-1).type,'proposal');
+  assert.equal(app.run('prepared.items[0].text'),'ИНН');
+});
+test('invalid objects and long labels are diagnosed, never silently truncated',()=>{
+  const {run}=backend();
+  assert.throws(()=>run(`normalizeModelLabel({id:1,text:{value:'ИНН'}},2)`),/Компонент №3.*строкой/);
+  assert.throws(()=>run(`normalizeModelLabel({id:1,text:'а'.repeat(121)},0)`),/121 символов/);
+  assert.throws(()=>run(`normalizeModelLabel({id:1,name:'TextField'},0)`),/не передала подпись/);
+});

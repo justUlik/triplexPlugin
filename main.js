@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.3' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.4' });
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {
@@ -1422,6 +1422,42 @@ function sendPlanRequest(revision) {
   send('prepared', { prompt });
 }
 
+function normalizeModelLabel(item, index, previous) {
+  // Some CLI responses call the visible label `label` or `title`.
+  // Never use `name`: it may be the library component name, not the user's label.
+  const supplied = [item?.text, item?.label, item?.title].filter(value => value !== undefined && value !== null && value !== '');
+  let text = supplied[0];
+  if (text === undefined || (typeof text === 'string' && !text.trim())) text = previous?.text;
+  const fail = reason => {
+    const error = new Error('Компонент №' + (index + 1) + (item?.id != null ? ' (id=' + item.id + ')' : '') + ': ' + reason + '. Нужна подпись в text, например «ИНН плательщика».');
+    error.code = 'MODEL_LABEL';
+    throw error;
+  };
+  if (text === undefined) fail('модель не передала подпись');
+  if (typeof text !== 'string') fail('подпись должна быть строкой, получен ' + (Array.isArray(text) ? 'массив' : typeof text));
+  text = text.replace(/\\r\\n|\\n|\\r/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) fail('подпись пуста');
+  if ([...text].length > 120) fail('подпись слишком длинная (' + [...text].length + ' символов, максимум 120)');
+  return text;
+}
+
+function requestLabelRepair(message, error) {
+  if (error.code !== 'MODEL_LABEL' || !prepared || !['review', 'reviewDialog'].includes(message.type) || prepared.labelRepairAttempted) return false;
+  prepared.labelRepairAttempted = true;
+  const dialog = message.type === 'reviewDialog';
+  const prompt = [
+    'Исправь формат своего ответа. Не меняй смысл задачи и ранее согласованные решения.',
+    'Ошибка проверки: ' + error.message,
+    'У каждой новой строки items обязательны id и непустой text: видимая подпись до 120 символов. Не передавай объект вместо строки. Для существующей строки с uid можно пропустить text, тогда сохранится прежняя подпись.',
+    dialog ? 'Верни JSON с action:list, reply и полным итоговым items с учётом последних правок пользователя. Для замены типа передай uid и новый id.' : 'Верни JSON с reply и полным items: [{id:1,text:"Подпись",placeholder:""}].',
+    JSON.stringify({ task: prepared.task, standard: prepared.standard, conversation,
+      catalog: modelCatalog(prepared.catalog), currentItems: prepared.items?.map(({uid,id,text}) => ({uid,id,text})),
+      invalidResponse: typeof message.raw === 'string' ? message.raw.slice(0, 8000) : '' })
+  ].join('\n');
+  send(dialog ? 'dialogRequest' : 'prepared', { prompt, repairing: true });
+  return true;
+}
+
 async function review(raw) {
   if (!prepared) throw new Error('Сначала запросите компоненты.');
   if (typeof raw !== 'string' || raw.length > 30000) throw new Error('Некорректный ответ GigaCode.');
@@ -1435,13 +1471,11 @@ async function review(raw) {
   if (!Array.isArray(plan?.items) || plan.items.length > 12) {
     throw new Error('В плане должно быть не больше 12 полей.');
   }
-  const items = plan.items.map(item => {
+  const items = plan.items.map((item, index) => {
     if (!Number.isInteger(item?.id) || item.id < 1 || item.id > prepared.catalog.length) {
       throw new Error('GigaCode предложил компонент, которого нет в каталоге.');
     }
-    if (typeof item.text !== 'string' || !item.text.trim() || item.text.length > 120 || /[\r\n]/.test(item.text)) {
-      throw new Error('GigaCode вернул некорректную подпись поля.');
-    }
+    const text = normalizeModelLabel(item, index);
     const placeholder = item.placeholder;
     if (placeholder != null &&
         (typeof placeholder !== 'string' || placeholder.length > 120 || /[\r\n]/.test(placeholder))) {
@@ -1451,7 +1485,7 @@ async function review(raw) {
     if (value != null && (typeof value !== 'string' || value.length > 120 || /[\r\n]/.test(value))) {
       throw new Error('GigaCode вернул некорректное моковое значение.');
     }
-    return { id: item.id, text: item.text.trim(), placeholder: placeholder?.trim(), value: value?.trim(), readOnly: item.readOnly === true, optionExample: typeof item.optionExample === 'string' ? item.optionExample.slice(0, 240) : '', error: '' };
+    return { id: item.id, text, placeholder: placeholder?.trim(), value: value?.trim(), readOnly: item.readOnly === true, optionExample: typeof item.optionExample === 'string' ? item.optionExample.slice(0, 240) : '', error: '' };
   });
   const parts = new Map();
   for (const id of new Set(items.map(item => item.id))) {
@@ -1491,6 +1525,7 @@ async function review(raw) {
 
 function requestConversation({ revision }) {
   if (!prepared?.items || typeof revision !== 'string' || !revision.trim()) throw new Error('Введите сообщение.');
+  prepared.labelRepairAttempted = false;
   prepared.revisionPending = true;
   conversation.push({ role: 'user', text: revision.trim() });
   const configuring = prepared.stage !== 'list';
@@ -1563,8 +1598,8 @@ async function reviewListRevision(response) {
     if (!existing.has(uid) || changes.has(uid)) throw new Error('Некорректный uid в изменениях.');
     changes.set(uid, change);
   }
-  const allowed = new Set(['uid', 'id', 'text', 'placeholder', 'value', 'readOnly', 'optionExample', 'values', 'variant', 'error']);
-  const rows = response.items.map(entry => {
+  const allowed = new Set(['uid', 'id', 'label', 'title', 'text', 'placeholder', 'value', 'readOnly', 'optionExample', 'values', 'variant', 'error']);
+  const rows = response.items.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Некорректная строка нового набора.');
     const uid = entry.uid === undefined ? undefined : normalize(entry.uid);
     const previous = existing.get(uid);
@@ -1574,8 +1609,11 @@ async function reviewListRevision(response) {
     if (Object.keys(patch).some(key => !allowed.has(key))) throw new Error('Ответ содержит неизвестное свойство. Для замены типа нужен id из каталога.');
     const id = patch.id === undefined ? previous?.id : normalize(patch.id);
     if (!Number.isInteger(id) || !context.catalog[id - 1]) throw new Error('Тип компонента отсутствует в каталоге.');
-    const spec = { ...previous, ...patch, id, uid };
-    if (typeof spec.text !== 'string' || !spec.text.trim() || spec.text.length > 120 || /[\r\n]/.test(spec.text)) throw new Error('Некорректная подпись компонента.');
+    const text = normalizeModelLabel(patch, index, previous);
+    if (['text', 'label', 'title'].some(key => patch[key] !== undefined)) patch.text = text;
+    delete patch.label;
+    delete patch.title;
+    const spec = { ...previous, ...patch, text, id, uid };
     for (const key of ['placeholder', 'value', 'optionExample']) {
       if (spec[key] != null && (typeof spec[key] !== 'string' || spec[key].length > (key === 'optionExample' ? 240 : 120) || /[\r\n]/.test(spec[key]))) throw new Error('Некорректный текст компонента.');
     }
@@ -1590,7 +1628,10 @@ async function reviewListRevision(response) {
     const history = conversation.slice();
     try {
       prepared = { ...context, importOnly: true };
-      await review(JSON.stringify({ items: imports.map(row => row.spec) }));
+      await review(JSON.stringify({ items: imports.map(({ spec }) => ({
+        id: spec.id, text: spec.text, placeholder: spec.placeholder, value: spec.value,
+        readOnly: spec.readOnly, optionExample: spec.optionExample
+      })) }));
       imported = prepared.items;
     } finally {
       prepared = context;
@@ -2304,6 +2345,7 @@ async function handleMessage(message) {
         break;
     }
   } catch (error) {
+    try { if (requestLabelRepair(message, error)) return; } catch (repairError) { error = repairError; }
     const stage = { prepare: 'Подготовка запроса', review: 'Проверка предложения', apply: 'Вставка полей' }[message.type];
     const detail = error.message || String(error);
     send('error', { message: stage ? stage + ' — ' + detail : detail, revisionPending: Boolean(prepared?.revisionPending) });
