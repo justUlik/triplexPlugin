@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light; font: 14px system-ui, sans-serif; color: #172e25; background: #f5f8f6; }
+  body { margin: 0; padding: 20px; }
+  [hidden] { display: none; }
+  p { margin: 6px 0 12px; }
+  .hint { color: #496057; font-size: 12px; line-height: 1.45; }
+  label { display: block; margin: 8px 0; font-weight: 600; }
+  input, select, textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; padding: 8px;
+    border-radius: 7px; border: 1px solid #a9bcb3; background: white; color: inherit; font: inherit; }
+  textarea { resize: vertical; min-height: 72px; }
+  button { border: 1px solid #a9bcb3; background: white; color: inherit; padding: 8px 12px; border-radius: 7px;
+    font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary { background: #087647; color: white; border-color: #087647; }
+  button:disabled { opacity: .55; cursor: default; }
+  details { margin: 12px 0; padding: 10px 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
+  summary { font-weight: 600; cursor: pointer; }
+  #items img { display: block; max-width: 100%; max-height: 300px; object-fit: contain; margin: 12px 0; }
+  #items > li { padding: 12px; margin-bottom: 12px; border: 1px solid #d5e0da; border-radius: 8px; background: white; }
+  #items input[type="checkbox"] { display: inline-block; width: auto; margin-left: 8px; }
+  #componentChat, #flowChat { list-style: none; padding: 0; }
+  .message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; padding: 10px 12px; background: white; border-radius: 10px; }
+  .message.user { background: #dcefe5; margin-left: 12%; }
+  #status { min-height: 20px; line-height: 1.4; }
+  .message p { margin: 8px 0; }
+  .message ul { margin: 8px 0; padding-left: 22px; }
+  .remove-component { float: right; margin-left: 12px; color: #a22222; font-size: 18px; line-height: 1; }
+  .state-card { padding: 16px; margin: 16px 0; border: 1px solid #d5e0da; border-radius: 12px; background: white; }
+  .state-card h3 { margin: 0 0 12px; font-size: 16px; }
+  .state-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 20px; }
+  .state-preview { padding: 12px; background: #f5f8f6; border-radius: 8px; }
+  .state-preview img { display:block; max-width:100%; max-height:420px; object-fit:contain; margin-top:12px; }
+  .state-preview p { white-space:pre-wrap; }
+  @media(max-width:600px) { .state-grid { grid-template-columns: 1fr; } }
+  .component-name { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+  #status.error { color: #a22222; }
+
+  :root {font:16px 'SB Sans Text',Arial,sans-serif;color:#000;background:#fff;--accent:#21a19a;--field:#f2f4f7;--muted:rgba(31,31,34,.65)}
+  * {box-sizing:border-box} body {padding:40px;max-width:625px;margin:0 auto} [hidden]{display:none!important}
+  header {margin-bottom:16px} h1 {font:600 24px 'SB Sans Display',Arial,sans-serif;margin:0 0 12px;line-height:29px} header p{font-size:16px;line-height:21px;margin:0}
+  button {border:0;border-radius:10px;padding:10px 20px;font-size:14px;font-weight:500;background:#f2f2f7;color:var(--accent);min-height:38px}
+  button.primary {background:var(--accent);border:0;color:#fff} button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  button:disabled{opacity:.6} button.loading {font-size:0;background:#f2f2f7;color:var(--accent);min-width:134px} button.loading:after{content:'•••';font-size:16px;letter-spacing:3px;animation:pulse 1s infinite} @keyframes pulse{50%{opacity:.3}}
+  label {font-size:12px;font-weight:400;color:var(--muted);margin:16px 0 0;border-radius:10px;background:var(--field);padding:10px 12px;display:block}
+  label:focus-within {outline:1px solid var(--accent)} input,textarea,select {margin:0;padding:0;border:0;border-radius:0;background:transparent;font:16px 'SB Sans Text',Arial,sans-serif;color:#000;outline:none;line-height:20px}
+  textarea {min-height:60px;resize:vertical} #token {min-height:20px} #formSetup>p,#saveStatus,#historyPanel,#editorMetrics,#modelMetrics,#catalogInfo,#target {display:none!important}
+  #formSetup label {margin-top:16px} #prepare{margin-top:16px} #plan h2{font-size:16px;font-weight:500;margin:16px 0}
+  #status {font-size:12px;line-height:18px;margin:12px 0;color:var(--muted);min-height:0} #status:empty{display:none} #status.error{color:#b42318}
+  .size-field{position:relative} #sizeToggle{display:flex;width:100%;height:56px;padding:10px 12px;align-items:center;justify-content:space-between;background:var(--field);font-size:16px;color:var(--muted);text-align:left}
+  #sizeToggle[aria-expanded=true],#sizeToggle:has(small:not([hidden])){outline:1px solid var(--accent);outline-offset:-1px} #sizeCaption{font-size:12px;line-height:16px;display:block} #sizeValue{line-height:20px} #sizeIcon{font-size:22px;color:#949599}
+  #sizeOptions{position:absolute;top:60px;left:0;right:0;z-index:10;background:#fff;border-radius:10px;padding:4px;box-shadow:0 2px 7px #1f1f2240} #sizeOptions button{display:block;width:100%;height:34px;min-height:34px;text-align:left;background:white;color:black;padding:8px 12px;border-radius:8px} #sizeOptions button:hover,#sizeOptions button:focus{background:#eaedf1}
+  #place{margin-top:16px} #items{list-style:none;padding:0;margin:16px 0;display:flex;flex-direction:column;gap:16px} #items>li{position:relative;padding:10px 12px;margin:0;border:0;border-radius:10px;background:var(--field);min-height:56px;padding-right:40px} #items strong{display:block;font-size:16px;font-weight:400;line-height:20px}.component-name{margin:0;font-size:12px;line-height:16px;color:var(--muted)}
+  .remove-component{position:absolute;right:10px;top:15px;padding:0;min-height:24px;width:24px;color:#727478;font-size:18px;margin:0;background:transparent}
+  #componentChat{display:none;margin:16px 0} #plan[data-stage=list][data-revised=true] #componentChat{display:block} #componentChat .message{padding:10px 12px;border:1px solid var(--accent);background:var(--field);border-radius:10px;max-width:71%;font-size:16px;line-height:20px} #componentChat strong{font-size:12px;font-weight:400;color:var(--muted)} #componentChat p{margin:0} .message.user{margin-left:auto}
+  #plan[data-stage=copy] #items>li{padding:0;background:white} #plan[data-stage=copy] #items>li>strong{padding:10px 12px;background:var(--field);border:1px solid var(--accent);border-radius:10px} #plan[data-stage=copy] .remove-component{display:none} #items img{max-width:100%;max-height:300px;object-fit:contain;margin:16px auto}
+  #items details{border:0;padding:0;background:white;margin:16px 0} #items summary{color:var(--accent);font-size:14px;font-weight:400} #items p:has(button){display:flex;gap:16px;margin:24px 0 0} #items input[type=checkbox]{width:auto} #listActions>button,#apply+#backComponent{margin-right:12px} #apply{margin-top:16px} #retry{margin-top:16px}
+  @media(max-width:400px){body{padding:24px} #listActions>button{margin:0 8px 8px 0}}
+
+  #formSetup label:has(#token),#startForm label,#listActions>label{position:relative;padding:10px 12px}
+  #formSetup label:has(#token){height:56px} #startForm label,#listActions>label{min-height:96px}
+  #formSetup label:has(#token)>span,#startForm label>span,#listActions>label>span{display:block;line-height:16px}
+  #formSetup label:has(#token:placeholder-shown):not(:focus-within)>span,#startForm label:has(textarea:placeholder-shown):not(:focus-within)>span,#listActions>label:has(textarea:placeholder-shown):not(:focus-within)>span{font-size:16px;line-height:20px;position:absolute;top:18px;pointer-events:none}
+  #formSetup label:has(#token:placeholder-shown):not(:focus-within) input::placeholder,#startForm label:not(:focus-within) textarea::placeholder,#listActions>label:not(:focus-within) textarea::placeholder{color:transparent}
+  #formSetup label:has(#token:placeholder-shown):not(:focus-within) input,#startForm label:has(textarea:placeholder-shown):not(:focus-within) textarea,#listActions>label:has(textarea:placeholder-shown):not(:focus-within) textarea{padding-top:16px}
+
+  h1{line-height:28px} header p{line-height:20px} #sizeToggle{font-weight:400} #sizeToggle:has(small:not([hidden])) #sizeValue{color:#000}
+  #sizeIcon{font-size:0;width:10px;height:10px;border-right:2px solid #949599;border-bottom:2px solid #949599;transform:translateY(-3px) rotate(45deg);margin-right:4px}
+  #sizeToggle[aria-expanded=true] #sizeIcon{transform:translateY(3px) rotate(225deg)} #sizeToggle:disabled #sizeIcon{border:0;font-size:16px;transform:none;width:20px;height:auto}
+  #listActions>label{margin-bottom:16px} textarea{resize:none} .remove-component{font-family:Arial,sans-serif}
+</style>
+</head>
+<body>
+<header><h1>ChatToDesign</h1><p>Позволяет решать бизнес-задачу<br>для форм на Triplex.Next</p></header>
+<details id="historyPanel">
+  <summary>История диалогов этого файла</summary>
+  <button id="refreshHistory" type="button">Обновить историю</button>
+  <button id="newDialogue" type="button">Новый диалог</button>
+  <ol id="historyList"></ol>
+</details>
+<p id="saveStatus" class="hint" role="status">Диалоги сохраняются в этом файле</p>
+<div id="sizeField" class="size-field">
+<select id="lightboxSize" hidden><option value="">Размер формы</option><option>SM</option><option>MD</option><option>LG</option><option>XL</option></select>
+<button id="sizeToggle" type="button" aria-expanded="false" aria-controls="sizeOptions"><span><small id="sizeCaption" hidden>Размер формы</small><span id="sizeValue">Размер формы</span></span><span id="sizeIcon" aria-hidden="true">⌄</span></button>
+<div id="sizeOptions" hidden role="listbox" aria-label="Размер формы">
+<button type="button" data-size="SM" role="option">SM</button><button type="button" data-size="MD" role="option">MD</button><button type="button" data-size="LG" role="option">LG</button><button type="button" data-size="XL" role="option">XL</button>
+</div></div>
+<button id="place" type="button" hidden disabled>Повторить попытку</button>
+<section id="formSetup" hidden>
+  <div id="modelSettings">
+    
+    <label><span>Токен GigaCode CLI</span><input id="token" type="password" autocomplete="off" placeholder="Введите значение"></label>
+    <label hidden>Правила текстового стандарта Triplex <textarea id="standard" maxlength="8000" placeholder="Вставьте правила канала для этой формы"></textarea></label>
+  </div>
+
+  <p class="hint">Настройте LightBox на холсте. Выделите внутренний фрейм с автолейаутом или оставьте BodyPage по умолчанию.</p>
+  <div id="startForm">
+  <label><span>Описание бизнес-задачи</span>
+    <textarea id="task" maxlength="3000" placeholder="Описание бизнес-задачи"></textarea>
+  </label>
+  <button id="prepare" class="primary" type="button">Предложить компоненты</button>
+  </div>
+
+</section>
+
+<p id="editorMetrics" class="hint" role="status" hidden></p>
+<p id="modelMetrics" class="hint" role="status" hidden></p>
+<p id="catalogInfo" class="hint" hidden></p>
+<p id="status" role="status" aria-live="polite">Интерфейс загружается…</p>
+<section id="plan" hidden>
+  <h2 id="planTitle">1. Согласуйте набор компонентов</h2>
+  <p id="target" class="hint"></p>
+  <ol id="componentChat" role="log"></ol>
+  <ol id="items"></ol>
+  <div id="listActions">
+  <label><span>Доработка</span>
+    <textarea id="revision" maxlength="3000" placeholder="Доработка"></textarea>
+  </label>
+  <button id="revise" class="primary" type="button">Отправить на доработку</button>
+  <button id="keepCurrent" type="button" hidden>Оставить текущий набор без правок</button>
+  <button id="openProperties" type="button">Подтвердить</button>
+  </div>
+  <button id="apply" hidden class="primary" type="button">Поставить на макет</button>
+  <button id="backComponent" type="button" hidden>Назад</button>
+</section>
+
+<section id="layoutStep" hidden>
+  <p>Расставьте компоненты на фрейме и настройте их размеры. Когда всё готово, закрепите верстку.</p>
+  <button id="lockLayout" type="button">Закрепить верстку</button>
+  <button id="unlockLayout" type="button" hidden>Изменить верстку</button>
+</section>
+<details id="scenario" hidden>
+  <summary>Состояния и ошибки</summary>
+  <ol id="flowChat" role="log"></ol>
+  <div id="flowChoices"></div>
+  <p id="flowIntro" class="hint">Сначала GigaCode предложит состояния и ошибки по вашей задаче и собранному экрану. Затем можно будет выбрать варианты и дополнить кейс.</p>
+  <label id="flowFeedback" hidden>Уточните кейс, чтобы дополнить состояния и ошибки <textarea id="feedback" maxlength="2000" placeholder="Например, добавь ошибки для перевода на закрытый счёт"></textarea></label>
+  <button id="flowSend" type="button">Предложить состояния и ошибки</button>
+  <button id="approveFlow" type="button" hidden>Утвердить состояния и ошибки</button>
+  <button id="createStates" type="button" hidden>Создать выбранные состояния рядом с фреймом</button>
+</details>
+<button id="retry" type="button" hidden>Повторить отправку</button>
+
+<script>
+const $ = id => document.getElementById(id);
+let busy = false;
+let lastRequest;
+let lastModelRequest;
+let pendingMessage;
+let readDraft;
+let previewTimer;
+let replacePreview;
+let imageTimer;
+let activePreviewId;
+let previewStage = '';
+let previewUrl;
+let formPlaced = false;
+let componentCount = 0;
+let stage = 'list';
+let wasRevised = false;
+let revisionPending = false;
+let flowApproved = false;
+let hasFlowDraft = false;
+let hasFlowResponse = false;
+let hasSource = false;
+let layoutLocked = false;
+let flowStates = [];
+let flowSelection = [];
+const flowDecisions = new Map();
+
+let transcript = [];
+let replayingHistory = false;
+let historyReadOnly = false;
+let currentSessionId;
+let sessionSaveTimer;
+function sessionUISnapshot() {
+  return { task:$('task').value, standard:$('standard').value, feedback:$('feedback').value,
+    revision:$('revision').value, size:selectedSize(), transcript, hasFlowDraft, hasFlowResponse,
+    flowDecisions:[...flowDecisions], flowEdits, draft:stage==='copy' ? readDraft?.() : undefined };
+}
+function saveSessionUI() {
+  clearTimeout(sessionSaveTimer);sessionSaveTimer=undefined;
+  if (replayingHistory || historyReadOnly) return;
+  post('saveSessionUI', {ui:sessionUISnapshot()});
+}
+function scheduleSessionSave() {
+  clearTimeout(sessionSaveTimer);
+  if(replayingHistory || historyReadOnly)return;
+  sessionSaveTimer=setTimeout(saveSessionUI,500);
+}
+function renderHistory(sessions) {
+  $('historyList').replaceChildren();
+  if (!sessions.length) { const p=document.createElement('p');p.textContent='В этом файле пока нет сохранённых диалогов.';$('historyList').appendChild(p); }
+  const names={setup:'Начало',list:'Выбор компонентов',copy:'Настройка компонентов',ready:'Готов к вставке',done:'Макет и состояния'};
+  for(const session of sessions) {
+    const row=document.createElement('li');
+    const button=document.createElement('button');
+    button.textContent=session.title;
+    button.disabled=busy;
+    button.onclick=()=>{ if(busy)return; saveSessionUI();setBusy(true);post('openSession',{id:session.id}); };
+    const note=document.createElement('p');note.className='hint';
+    note.textContent=(names[session.stage]||session.stage)+' · '+new Date(session.updatedAt).toLocaleString('ru-RU');
+    row.append(button,note);$('historyList').appendChild(row);
+  }
+}
+$('refreshHistory').onclick=()=>{ if(!busy){saveSessionUI();post('listHistory');} };
+$('newDialogue').onclick=()=>{ if(!busy){saveSessionUI();setBusy(true);post('newSession');} };
+for(const id of ['task','standard','feedback','revision','lightboxSize']) $(id).addEventListener('input',scheduleSessionSave);
+function restoreHistoryUI(message) {
+  clearTimeout(sessionSaveTimer);sessionSaveTimer=undefined;
+  replayingHistory=true;
+  try {
+    resetPlan();clearFlow();
+    $('componentChat').replaceChildren();$('flowChat').replaceChildren();
+    transcript=[];
+    const saved=message.ui||{};
+    for(const id of ['task','standard','feedback','revision']) $(id).value=saved[id]||'';
+    $('lightboxSize').value=saved.size||'';
+    $('sizeValue').textContent=saved.size||'Размер формы';$('sizeCaption').hidden=!saved.size;
+    currentSessionId=message.sessionId;
+    historyReadOnly=message.readOnly===true;
+    formPlaced=message.formPlaced===true;hasSource=message.hasSource===true;layoutLocked=message.layoutLocked===true;
+    flowApproved=message.flowApproved===true;revisionPending=message.revisionPending===true;
+    stage=message.stage||'list';componentCount=message.items?.length||0;
+    wasRevised=(saved.transcript||[]).filter(record=>record.author==='Вы').length>1;
+    for(const record of saved.transcript||[]) {addMessage(record.chat,record.author,record.text);transcript.push(record);}
+    for(const pair of saved.flowDecisions||[]) flowDecisions.set(pair[0],pair[1]);
+    if(message.flow?.states) renderFlowChoices(message.flow.states,message.labels,saved.flowEdits);
+    hasFlowResponse=saved.hasFlowResponse===true || Boolean(message.flow);
+    hasFlowDraft=saved.hasFlowDraft===true && Boolean(message.flow?.states?.length);
+    $('formSetup').hidden=!formPlaced;
+    $('plan').hidden=!formPlaced && !transcript.length;
+    $('scenario').open=hasFlowResponse;
+    $('planTitle').textContent=stage==='done'?'Компоненты на фрейме':'Текущий набор компонентов';
+    if(!historyReadOnly && stage==='copy' && message.items?.[message.index]) {
+      $('planTitle').textContent='Компонент '+(message.index+1)+' из '+componentCount;
+      $('items').replaceChildren(renderItem(message.index,message.items[message.index]));
+    } else renderProposal(message.items||[]);
+    lastRequest=lastModelRequest=undefined;
+    status(message.warning || (currentSessionId?'Диалог восстановлен. Можно продолжить.':'Новый диалог. Выберите размер LightBox.'),historyReadOnly);
+    $('saveStatus').textContent=currentSessionId?'Сохранённый диалог открыт':'Диалог будет сохраняться в этом файле';
+  } finally {replayingHistory=false;}
+}
+
+function selectedSize() {
+  return $('lightboxSize').value;
+}
+let placementTimer;
+
+function post(type, data = {}) {
+  parent.postMessage({ pluginMessage: { type, ...data } }, '*');
+}
+
+function status(text, error = false) {
+  $('status').hidden = !text;
+  $('status').textContent = text;
+  $('status').classList.toggle('error', error);
+}
+
+function setBusy(value) {
+  busy = value;
+  for (const id of ['revise', 'revision', 'token', 'standard', 'feedback', 'flowSend', 'createStates', 'lockLayout', 'unlockLayout']) {
+    $(id).disabled = value;
+  }
+  $('flowFeedback').hidden = !hasFlowResponse;
+  $('flowIntro').hidden = hasFlowResponse;
+  $('flowSend').textContent = hasFlowResponse ? 'Дополнить предложения' : 'Предложить состояния и ошибки';
+  $('approveFlow').hidden = !hasFlowDraft || flowApproved;
+  $('approveFlow').disabled = value;
+  $('layoutStep').hidden = true;
+  $('lockLayout').hidden = layoutLocked;
+  $('unlockLayout').hidden = !layoutLocked;
+  $('scenario').hidden = true;
+  $('flowChoices').querySelectorAll('button,input,textarea').forEach(button => { button.disabled = value; });
+  $('retry').hidden = !lastRequest;
+  $('retry').disabled = value;
+  $('startForm').hidden = false;
+  $('prepare').hidden = componentCount > 0;
+  $('backComponent').hidden = stage !== 'ready';
+  $('backComponent').disabled = value;
+  $('sizeToggle').disabled = value;
+  $('sizeIcon').textContent = value && !formPlaced ? '…' : '⌄';
+  $('place').hidden = formPlaced || !selectedSize() || !$('status').classList.contains('error');
+  $('plan').dataset.stage = stage;
+  $('plan').dataset.revised = String(wasRevised);
+  for(const id of ['prepare','revise','apply']) { $(id).classList.toggle('loading',value && !$(id).hidden); $(id).setAttribute('aria-busy',String(value)); }
+  $('planTitle').textContent = stage === 'copy' ? 'Свойства компонентов' : stage === 'ready' ? 'Набор компонентов' : stage === 'done' ? 'Компоненты на макете' : wasRevised ? 'Доработки' : 'Предложенные компоненты';
+  $('createStates').hidden = !hasSource || !flowApproved;
+  $('items').querySelectorAll('input, select, textarea, button').forEach(control => { control.disabled = value; });
+  $('openProperties').hidden = stage !== 'list';
+  $('openProperties').disabled = value || !componentCount || revisionPending;
+  $('keepCurrent').hidden = !revisionPending;
+  $('keepCurrent').disabled = value;
+  if (revisionPending) $('items').querySelectorAll('button').forEach(button => { button.disabled = true; });
+  $('listActions').hidden = stage !== 'list';
+  $('apply').hidden = stage !== 'ready';
+  $('apply').disabled = value || revisionPending;
+  $('place').disabled = value || !selectedSize();
+  $('prepare').disabled = value || !formPlaced;
+  $('task').disabled = value || componentCount > 0;
+  $('newDialogue').disabled = $('refreshHistory').disabled = value;
+  $('historyList').querySelectorAll('button').forEach(button=>{button.disabled=value;});
+  if(historyReadOnly) {
+    for(const id of ['prepare','place','revise','openProperties','apply','lockLayout','unlockLayout','flowSend','approveFlow','createStates','keepCurrent']) $(id).disabled=true;
+    $('items').querySelectorAll('input,select,textarea,button').forEach(control=>{control.disabled=true;});
+    $('flowChoices').querySelectorAll('button,input,textarea').forEach(control=>{control.disabled=true;});
+    for(const id of ['task','standard','revision','feedback']) $(id).disabled=true;
+  }
+}
+
+function resetPlan() {
+  revisionPending = false;
+  $('plan').hidden = true;
+  $('target').textContent = '';
+  $('catalogInfo').hidden = true;
+  $('planTitle').textContent = 'Согласование компонентов';
+  $('items').replaceChildren();
+  $('revision').value = '';
+  componentCount = 0;
+  flowApproved = false;
+  hasFlowDraft = false;
+  hasFlowResponse = false;
+  $('flowChat').replaceChildren();
+  $('feedback').value = '';
+  $('scenario').open = false;
+  stage = 'list';
+  wasRevised=false;
+  readDraft = undefined;
+  pendingMessage = undefined;
+  clearTimeout(previewTimer);
+  clearTimeout(imageTimer);
+  if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
+  activePreviewId = undefined;
+  $('componentChat').replaceChildren();
+}
+
+$('retry').onclick = () => {
+  if (busy || !lastRequest) return;
+  setBusy(true);
+  showWorking();
+  if (lastModelRequest) {
+    requestModel(lastModelRequest.prompt).then(raw => post(lastModelRequest.responseType, { raw }))
+      .catch(error => { status(error.message, true); finishPending(error.message); setBusy(false); });
+  } else post(lastRequest.type, lastRequest.data);
+};
+
+function finishPending(text) {
+  if (pendingMessage) addMessage('componentChat', 'GigaCode', text);
+}
+
+function sendRequest(type, data) {
+  clearTimeout(sessionSaveTimer);sessionSaveTimer=undefined;
+  data={...data,ui:sessionUISnapshot()};
+  lastRequest = { type, data };
+  lastModelRequest = undefined;
+  post(type, data);
+}
+
+$('lightboxSize').onchange = () => {
+  if (!busy) {
+    status('');
+    setBusy(false);
+  }
+};
+
+$('place').onclick = () => {
+  const size = selectedSize();
+  if (busy || !size) return;
+  saveSessionUI();
+  resetPlan();
+  transcript=[];
+  formPlaced=false;hasSource=false;layoutLocked=false;
+  $('formSetup').hidden=true;
+  setBusy(true);
+  status('Ставлю LightBox ' + size + ' в Pixso…');
+  placementTimer = setTimeout(() => {
+    placementTimer = undefined;
+    setBusy(false);
+    status('Pixso не ответил за 20 секунд. Повторите попытку.', true);
+    $('place').hidden=false;
+  }, 20000);
+  post('placeLightbox', { size });
+};
+
+for (const id of ['task']) {
+  $(id).addEventListener('input', resetPlan);
+}
+
+$('prepare').onclick = () => {
+  if (busy) return;
+  if (!$('token').value.trim()) {
+    $('modelSettings').open = true;
+    status('Введите код подключения из терминала.');
+    return;
+  }
+  if (!$('task').value.trim()) { status('Опишите бизнес-задачу.', true); $('task').focus(); return; }
+  resetPlan();
+  wasRevised=false;
+  setBusy(true);
+  addMessage('componentChat', 'Вы', $('task').value.trim());
+  showWorking();
+  status('Готовлю запрос…');
+  sendRequest('prepare', { task: $('task').value.trim(), standard: $('standard').value });
+};
+
+$('revise').onclick = () => {
+  if (busy) return;
+  const revision = $('revision').value.trim();
+  if (!revision) {
+    status('Опишите, что изменить в предложении.');
+    return;
+  }
+  setBusy(true);
+  if(!wasRevised) $('componentChat').replaceChildren();
+  wasRevised = true;
+  revisionPending = true;
+  setBusy(true);
+  status('Передаю правки в Pixso…');
+  addMessage('componentChat', 'Вы', revision);
+  showWorking();
+  sendRequest('dialog', { revision, draft: readDraft?.() });
+};
+
+function addMessage(chat, author, text) {
+  if (!text) return;
+  if (!replayingHistory && !['GigaChat работает…','Готовлю запрос в Pixso…','Ответ получен. Проверяю и применяю в Pixso…'].includes(text)) transcript.push({chat,author,text:String(text)});
+  const item = document.createElement('li');
+  item.className = 'message' + (author === 'Вы' ? ' user' : '');
+  const name = document.createElement('strong');
+  name.textContent = author;
+  item.appendChild(name);
+  const normalized = String(text).replace(/\\n/g, '\n').replace(/\\[ \t]*\n/g, '\n');
+  let list;
+  for (const line of normalized.split('\n').map(line => line.trim()).filter(Boolean)) {
+    const bullet = line.match(/^(?:[-*•]|\d+[.)])\s+(.+)$/);
+    if (bullet) {
+      if (!list) { list = document.createElement('ul'); item.appendChild(list); }
+      const row = document.createElement('li');
+      row.textContent = bullet[1];
+      list.appendChild(row);
+    } else {
+      list = undefined;
+      const paragraph = document.createElement('p');
+      paragraph.textContent = line;
+      item.appendChild(paragraph);
+    }
+  }
+  if (chat === 'componentChat' && author === 'GigaCode' && pendingMessage) {
+    pendingMessage.replaceWith(item);
+    pendingMessage = null;
+  } else $(chat).appendChild(item);
+  return item;
+}
+
+function showWorking() {
+  pendingMessage = addMessage('componentChat', 'GigaCode', 'Готовлю запрос в Pixso…');
+}
+
+$('keepCurrent').onclick = () => {
+  if (busy) return;
+  setBusy(true);
+  post('discardRevision');
+};
+
+function removeComponentButton(item) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'remove-component';
+  button.textContent = '🗑︎';
+  button.title = 'Убрать «' + item.text + '» из набора';
+  button.setAttribute('aria-label', button.title);
+  button.hidden = historyReadOnly || !Number.isInteger(item.uid) || !['list','copy','ready'].includes(stage);
+  button.onclick = () => {
+    if (busy || historyReadOnly || revisionPending) return;
+    clearTimeout(previewTimer);
+    clearTimeout(imageTimer);
+    saveSessionUI();
+    setBusy(true);
+    post('removeItem', {uid:item.uid});
+  };
+  return button;
+}
+
+function renderProposal(items) {
+  $('items').replaceChildren();
+  for (const item of items) {
+    const row = document.createElement('li');
+    const label = document.createElement('strong');
+    label.textContent = item.text;
+    const type = document.createElement('span');
+    type.className = 'component-name hint';
+    type.textContent = item.name;
+    row.append(type, label, removeComponentButton(item));
+
+    $('items').appendChild(row);
+  }
+}
+
+function componentLine(item) {
+  const name = item.readOnly ? (item.name.includes(' / ') ? item.name.replace(' / ', ' read-only / ') : item.name + ' read-only') : item.name;
+  return item.text + ' · ' + name +
+    (item.requestedReadOnly && !item.readOnly ? ' · read-only недоступен в этом варианте' : '');
+}
+
+function fieldLabel(key) {
+  const name = key.replace(/#.*$/, '');
+  if (/^(label|caption|title|field[ _-]?label|подпись|заголовок)$/i.test(name)) return 'Подпись';
+  if (/^(placeholder|плейсхолдер)$/i.test(name)) return 'Подсказка';
+  if (/^(value|input[ _-]?value|значение)$/i.test(name)) return 'Значение';
+  return name;
+}
+
+for (const id of ['task', 'standard', 'feedback']) {
+  $(id).addEventListener('input', () => {
+    flowApproved = false;
+    hasFlowDraft = false;
+    post('invalidateFlow');
+    setBusy(busy);
+  });
+}
+
+$('approveFlow').onclick = () => {
+  if (busy || !hasFlowDraft) return;
+  setBusy(true);
+  post('approveFlow', { selection: flowSelection, edits:flowEdits });
+};
+
+$('flowSend').onclick = () => {
+  if (busy) return;
+  if (!$('token').value.trim()) {
+    $('modelSettings').open = true;
+    status('Введите код подключения из терминала.');
+    return;
+  }
+  const feedback = hasFlowResponse ? $('feedback').value.trim() : '';
+  flowApproved = false;
+  hasFlowDraft = false;
+  addMessage('flowChat', 'Вы', feedback || $('task').value.trim());
+  setBusy(true);
+  status(hasFlowResponse ? 'GigaCode дополняет состояния и ошибки…' : 'GigaCode предлагает состояния и ошибки…');
+  saveSessionUI();
+  post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback, selection: flowSelection, edits:flowEdits });
+};
+
+function clearFlow() {
+  disposeFlowPreviews();
+  flowEdits=[];
+  hasFlowResponse = false;
+  flowApproved = false;
+  hasFlowDraft = false;
+  flowStates = [];
+  flowSelection = [];
+  flowDecisions.clear();
+  $('flowChoices').replaceChildren();
+  $('flowChat').replaceChildren();
+  $('feedback').value = '';
+}
+
+$('lockLayout').onclick = () => { if (!busy) { setBusy(true); post('lockLayout'); } };
+$('unlockLayout').onclick = () => { if (!busy) { setBusy(true); post('unlockLayout'); } };
+
+let flowEdits = [];
+const flowPreviewViews = new Map();
+let flowPreviewSequence = 0;
+function disposeFlowPreviews() {
+  for(const view of flowPreviewViews.values()) if(view.url) URL.revokeObjectURL(view.url);
+  flowPreviewViews.clear();
+}
+function renderFlowChoices(states, labels = {}, savedEdits = flowEdits) {
+  disposeFlowPreviews();
+  flowStates = states;
+  const stateKey = state => JSON.stringify([state.name, state.condition]);
+  const sourceKey = state => JSON.stringify([state.name,state.condition,state.errors]);
+  const errorKey = error => JSON.stringify([error.field, error.text]);
+  const previous = new Map((savedEdits||[]).map(edit=>[edit.sourceKey,edit]));
+  flowEdits = states.map(state=>previous.get(sourceKey(state)) || {sourceKey:sourceKey(state),name:state.name,condition:state.condition,values:{...state.values},errorTexts:state.errors.map(error=>error.text)});
+  flowSelection = states.map(state => ({ included: flowDecisions.get(stateKey(state)) ?? true,
+    errors: state.errors.map(error => flowDecisions.get(errorKey(error)) ?? true) }));
+  $('flowChoices').replaceChildren();
+  states.forEach((state, i) => {
+    const edit=flowEdits[i];
+    const card=document.createElement('section');card.className='state-card';
+    const heading=document.createElement('h3');heading.textContent=(i+1)+'. '+edit.name;
+    card.appendChild(heading);
+    const grid=document.createElement('div');grid.className='state-grid';
+    const content=document.createElement('div');
+    const preview=document.createElement('div');preview.className='state-preview';
+    const previewText=document.createElement('p');previewText.className='hint';previewText.textContent='Превью на основе закреплённого фрейма';
+    const previewButton=document.createElement('button');previewButton.type='button';previewButton.textContent='Показать превью';
+    const imageArea=document.createElement('div');
+    preview.append(previewText,previewButton,imageArea);grid.append(content,preview);card.appendChild(grid);
+    const view={area:imageArea,note:previewText,button:previewButton,token:0};flowPreviewViews.set(i,view);
+    function changed() {
+      flowApproved=false;
+      view.token=++flowPreviewSequence;
+      if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
+      imageArea.replaceChildren();previewText.textContent='Тексты или выбор изменены. Обновите превью.';
+      previewButton.textContent='Обновить превью';
+      post('invalidateFlow');scheduleSessionSave();setBusy(false);
+    }
+    function editable(title,value,write,multiline=false) {
+      const label=document.createElement('label');label.textContent=title;
+      const input=document.createElement(multiline?'textarea':'input');input.value=value;input.maxLength=3000;
+      input.oninput=()=>{write(input.value);changed();};label.appendChild(input);content.appendChild(label);
+    }
+    function toggle(parent,key,read,write,title) {
+      const button=document.createElement('button');button.type='button';
+      const refresh=()=>{button.textContent=read()?'+ Берём':'− Не берём';button.setAttribute('aria-pressed',String(read()));button.setAttribute('aria-label',title+': '+button.textContent);};
+      button.onclick=()=>{write(!read());flowDecisions.set(key,read());refresh();changed();};refresh();parent.appendChild(button);
+    }
+    toggle(content,stateKey(state),()=>flowSelection[i].included,value=>{flowSelection[i].included=value;},state.name);
+    editable('Название состояния',edit.name,value=>{edit.name=value;heading.textContent=(i+1)+'. '+value;});
+    editable('Когда показать',edit.condition,value=>{edit.condition=value;},true);
+    const summary=document.createElement('p');summary.className='hint';
+    const affected=[...new Set([...Object.keys(state.values),...(state.variants||[]).map(v=>v.field),...state.errors.map(error=>error.field)])];
+    summary.textContent='Что добавим: копию экрана с изменениями для '+(affected.length?affected.map(id=>labels[id]||id||'формы').join(', '):'состояния формы')+'. Остальная компоновка сохранится.';content.appendChild(summary);
+    for(const [id,value] of Object.entries(edit.values)) editable('Значение · '+(labels[id]||id)+' (можно оставить пустым)',value,text=>{edit.values[id]=text;});
+    state.errors.forEach((error,j)=>{
+      editable('Текст ошибки · '+(labels[error.field]||error.field||'Форма'),edit.errorTexts[j],text=>{edit.errorTexts[j]=text;},true);
+      toggle(content,errorKey(error),()=>flowSelection[i].errors[j],value=>{flowSelection[i].errors[j]=value;},error.text);
+    });
+    if(state.variants?.length) {
+      const details=document.createElement('details');const title=document.createElement('summary');title.textContent='Варианты компонентов';details.appendChild(title);
+      for(const variant of state.variants){const p=document.createElement('p');p.className='hint';p.textContent=(labels[variant.field]||variant.field)+' → '+variant.variant;details.appendChild(p);}content.appendChild(details);
+    }
+    previewButton.onclick=()=>{
+      if(busy||historyReadOnly)return;
+      if(!flowSelection[i].included){previewText.textContent='Состояние исключено. Включите его для превью.';return;}
+      view.token=++flowPreviewSequence;previewText.textContent='Готовлю превью в Pixso…';
+      post('previewFlowState',{index:i,previewId:view.token,edits:flowEdits,selection:flowSelection});
+    };
+    $('flowChoices').appendChild(card);
+  });
+}
+function showFlowPreview(message) {
+  const view=flowPreviewViews.get(message.index);
+  if(!view||view.token!==message.previewId)return;
+  if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
+  view.area.replaceChildren();
+  if(message.error){view.note.textContent='Превью недоступно: '+message.error;return;}
+  const img=document.createElement('img');img.alt='Превью состояния '+flowEdits[message.index].name;
+  view.url=URL.createObjectURL(new Blob([new Uint8Array(message.png)],{type:'image/png'}));img.src=view.url;view.area.appendChild(img);
+  const notes=document.createElement('p');notes.className='hint';notes.textContent='Подпись под фреймом:\n'+(message.annotations||[]).join('\n');view.area.appendChild(notes);
+  view.note.textContent=message.errorsPending?'У '+message.errorsPending+' ошибок нет текстового свойства в компоненте: текст будет в подписи под фреймом.':'Превью с выбранными состояниями и вашими текстами.';
+  if(message.skipped)view.note.textContent+=' Не удалось заполнить значений: '+message.skipped+'.';
+  view.button.textContent='Обновить превью';
+}
+
+
+$('createStates').onclick = () => {
+  if (busy) return;
+  setBusy(true);
+  post('createStates');
+};
+
+$('apply').onclick = () => {
+  if (busy) return;
+  setBusy(true);
+  status('Собираю экран в Pixso…');
+  post('apply');
+};
+
+let modelRequestNumber = 0;
+async function requestModel(prompt) {
+  if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('Плагин сформировал пустой запрос.');
+  if (prompt.length > 48000) throw new Error('Контекст диалога превышает лимит моста: ' + prompt.length + ' из 48000 символов. Запрос не отправлен.');
+  status('Запрос передан локальному мосту. Ожидаю ответ GigaCode…');
+  let response;
+  const requestNumber=++modelRequestNumber;
+  const startedAt=Date.now();
+  let progressTimer;
+  let finished=false;
+  const metrics=$('modelMetrics');
+  metrics.hidden=false;
+  const progress=()=>{
+    metrics.textContent='Запрос №'+requestNumber+' · '+prompt.length.toLocaleString('ru-RU')+' символов · ожидание '+Math.floor((Date.now()-startedAt)/1000)+' с';
+    progressTimer=setTimeout(progress,1000);
+  };
+  progress();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 100000);
+  try {
+    response = await fetch('http://127.0.0.1:43127/plan', {
+      signal: controller.signal,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + $('token').value.trim() },
+      redirect: 'error',
+      body: JSON.stringify({ prompt })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Ошибка GigaCode CLI.');
+    metrics.textContent='Запрос №'+requestNumber+' · '+prompt.length.toLocaleString('ru-RU')+' символов · ответ за '+((Date.now()-startedAt)/1000).toFixed(1)+' с'+(typeof data.metrics?.elapsedMs==='number'?' · CLI '+(data.metrics.elapsedMs/1000).toFixed(1)+' с':'');
+    finished=true;
+    status('Ответ GigaCode получен. Проверяю и применяю в Pixso…');
+    if(pendingMessage) {
+      pendingMessage.remove();
+      pendingMessage=null;
+      pendingMessage=addMessage('componentChat','GigaCode','Ответ получен. Проверяю и применяю в Pixso…');
+    }
+    return data.result;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Ответ не получен за 100 секунд. Нажмите «Повторить отправку».');
+    throw new Error(error.message || 'Не удалось подключиться. Проверьте, что мост GigaCode запущен на этом компьютере и Pixso разрешён доступ к нему.');
+  } finally {
+    clearTimeout(timer);clearTimeout(progressTimer);
+    if(!finished) metrics.textContent='Запрос №'+requestNumber+' · '+prompt.length.toLocaleString('ru-RU')+' символов · завершён с ошибкой через '+((Date.now()-startedAt)/1000).toFixed(1)+' с';
+  }
+}
+
+$('openProperties').onclick = () => {
+  setBusy(true);
+  addMessage('componentChat', 'Вы', 'Подтвердить набор компонентов');
+  status('Готовлю превью…');
+  post('openProperties');
+};
+function renderItem(index, item) {
+  const card = document.createElement('li');
+  const heading = document.createElement('strong');
+  const kind=document.createElement('span');kind.className='component-name';kind.textContent=item.name;
+  const title=document.createElement('span');title.textContent=item.text;
+  heading.append(kind,title);
+  card.appendChild(heading);
+  card.appendChild(removeComponentButton(item));
+  const actions = document.createElement('p');
+  card.appendChild(actions);
+  const preview = document.createElement('div');
+  card.appendChild(preview);
+  replacePreview = result => {
+    clearTimeout(imageTimer);
+    activePreviewId = result.pending ? result.previewId : undefined;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = undefined;
+    preview.replaceChildren();
+    if (result.png?.length) {
+      const image = document.createElement('img');
+      image.alt = 'Превью ' + result.name;
+      previewUrl = URL.createObjectURL(new Blob([new Uint8Array(result.png)], { type: 'image/png' }));
+      image.onerror = () => {
+        replacePreview({ previewError: 'Не удалось открыть изображение, полученное от Pixso.' });
+      };
+      image.src = previewUrl;
+      preview.appendChild(image);
+    } else {
+      const note = document.createElement('p');
+      note.dataset.previewStatus = '';
+      note.textContent = result.pending ? 'Готовлю превью…' : 'Превью недоступно' + (result.previewError ? ' — ' + result.previewError : '');
+      preview.appendChild(note);
+      if (result.pending) {
+        if(result.previewDeferred) {
+          note.textContent='Превью загружается по кнопке «Обновить превью», чтобы не нагружать Pixso.';
+          return;
+        }
+        previewStage = 'Создан экземпляр, ожидаю подготовку';
+        post('renderPreview', { previewId: result.previewId });
+        imageTimer = setTimeout(() => {
+        post('cancelPreview', { previewId: result.previewId });
+        replacePreview({ previewError: 'Остановилось на этапе «' + previewStage + '». Нажмите «Обновить превью», чтобы повторить.' });
+        }, 20000);
+      }
+    }
+  };
+  replacePreview({ ...item, previewDeferred:false, pending: Boolean(item.previewId) });
+  if (item.optionExample) {
+    const example = document.createElement('p');
+    example.className = 'hint';
+    example.textContent = 'Пример пункта списка — ' + item.optionExample;
+    card.appendChild(example);
+  }
+  const variant = document.createElement('select');
+  item.variants.forEach((name, i) => variant.add(new Option(name, i)));
+  variant.value = item.variant;
+  const state = document.createElement('label');
+  state.textContent = 'Базовый вариант';
+  state.appendChild(variant);
+  const settings = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = 'Вариант и свойства';
+  settings.append(summary, state);
+  card.appendChild(settings);
+  if (item.missing?.includes('подпись') && item.copy.some(copy => copy.title === 'Подпись')) {
+    const note = document.createElement('p');
+    note.className = 'hint';
+    note.textContent = 'Подпись не привязана к текстовому слою. Проверьте доступные поля или смените вариант.';
+    card.appendChild(note);
+  }
+  const fields = new Map();
+  for (const field of item.fields) {
+    const label = document.createElement('label');
+    label.textContent = fieldLabel(field.key);
+    const input = document.createElement('input');
+    input.type = field.type === 'BOOLEAN' ? 'checkbox' : 'text';
+    if (input.type === 'checkbox') input.checked = Boolean(field.value);
+    else input.value = field.value ?? '';
+    fields.set(field.key, input);
+    label.appendChild(input);
+    if (field.type === 'BOOLEAN') settings.appendChild(label);
+    else card.insertBefore(label, settings);
+  }
+  if (!item.fields.some(field => field.type === 'TEXT')) {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'На фрейме останется текст компонента. Чтобы заполнить поле, проверьте вариант и свойства.';
+    card.appendChild(hint);
+  }
+  if (stage === 'copy') {
+    if (fields.size && item.copy.length) {
+      const hint = document.createElement('p');
+      hint.className = 'hint';
+      hint.textContent = 'Впишите подходящие предложения из чата прямо в свойства компонента.';
+      card.insertBefore(hint, settings);
+    }
+  }
+  const confirm = document.createElement('button');
+  confirm.type = 'button';
+  confirm.textContent = 'Подтвердить';
+  confirm.className='primary';
+  actions.appendChild(confirm);
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.textContent = 'Обновить превью';
+  card.appendChild(refresh);
+  const back=document.createElement('button');back.type='button';back.textContent='Назад';
+  back.onclick=()=>{if(!busy){setBusy(true);post('backComponent',{draft:readDraft?.()});}};
+  actions.appendChild(back);
+  card.appendChild(actions);
+  card.addEventListener('input', event => {
+    if (event.target === variant) return;
+    clearTimeout(previewTimer);
+    scheduleSessionSave();
+    refresh.textContent='Обновить превью · есть правки';
+  });
+  variant.onchange = () => {
+    clearTimeout(previewTimer);
+    setBusy(true);
+    post('chooseVariant', readDraft());
+  };
+  readDraft = () => ({
+    index, variant: Number(variant.value),
+    values: Object.fromEntries(Array.from(fields, ([key, input]) =>
+      [key, input.type === 'checkbox' ? input.checked : input.value])),
+    error: ''
+  });
+  const sendValues = type => {
+    clearTimeout(previewTimer);
+    setBusy(true);
+    post(type, readDraft());
+  };
+  refresh.onclick = () => sendValues('previewItem');
+  confirm.onclick = () => {
+    const details = Array.from(fields, ([key, input]) => key.replace(/#.*$/, '') + ' — ' +
+      (input.type === 'checkbox' ? (input.checked ? 'включено' : 'выключено') : input.value));
+    addMessage('componentChat', 'Вы', heading.textContent + '\n' + details.join('\n'));
+    sendValues('confirmItem');
+  };
+  if(!item.previewId) post('previewItem',readDraft());
+  return card;
+}
+
+window.addEventListener('message', async event => {
+  if (event.source && event.source !== parent) return;
+  const message = event.data?.pluginMessage;
+  if (!message) return;
+  try {
+  if (typeof message.revisionPending === 'boolean') revisionPending = message.revisionPending;
+  if (message.catalogInfo) { $('catalogInfo').textContent = message.catalogInfo; $('catalogInfo').hidden = false; }
+  switch (message.type) {
+    case 'editorMetrics':
+      $('editorMetrics').hidden=false;
+      $('editorMetrics').textContent='Pixso · '+message.operation+' · обработка '+message.prepareMs+' мс · сохранение '+message.saveMs+' мс';
+      return;
+    case 'requestProgress':
+      status(message.message);
+      return;
+    case 'historySaved':
+      currentSessionId=message.sessionId;
+      $('saveStatus').textContent='Все изменения сохранены в этом файле';
+      return;
+    case 'historyList':
+      renderHistory(message.sessions);
+      return;
+    case 'historyError':
+      $('saveStatus').textContent=message.message;
+      setBusy(false);
+      return;
+    case 'sessionRestored':
+      restoreHistoryUI(message);
+      setBusy(false);
+      return;
+    case 'flowRequest':
+      try {
+        post('reviewFlow', { raw: await requestModel(message.prompt) });
+        return;
+      } catch (error) {
+        status(error.message, true);
+        finishPending(error.message);
+      }
+      break;
+    case 'flowPreview':
+      showFlowPreview(message);
+      return;
+    case 'flowProposal':
+      hasFlowResponse = true;
+      $('feedback').value = '';
+      hasFlowDraft = message.states.length > 0;
+      addMessage('flowChat', 'GigaCode', message.reply);
+      renderFlowChoices(message.states, message.labels);
+      status('');
+      break;
+    case 'layoutLocked':
+      layoutLocked = true;
+      clearFlow();
+      $('scenario').open = true;
+      status('Верстка закреплена. Нажмите «Предложить состояния и ошибки». GigaCode сначала подготовит свои варианты.');
+      break;
+    case 'layoutUnlocked':
+      layoutLocked = false;
+      clearFlow();
+      status('Измените макет, затем закрепите верстку заново.');
+      break;
+    case 'flowApproved':
+      flowApproved = true;
+      status('Состояния и тексты ошибок утверждены.');
+      break;
+    case 'statesCreated':
+      flowApproved = false;
+      hasFlowDraft = false;
+      status('Создано фреймов: ' + message.count + (message.skipped ? ' · Не удалось заполнить значений: ' + message.skipped : '') +
+        (message.errorsPending ? ' · Ошибок в подписи под фреймом (нет свойства в компоненте): ' + message.errorsPending : ''));
+      break;
+    case 'dialogRequest':
+      if (message.repairing) status('Исправляю формат ответа GigaCode…');
+      lastModelRequest = { prompt: message.prompt, responseType: 'reviewDialog' };
+      try { post('reviewDialog', { raw: await requestModel(message.prompt) }); return; }
+      catch (error) { status(error.message, true); finishPending(error.message); }
+      break;
+    case 'revisionDiscarded':
+      revisionPending = false;
+      lastRequest = lastModelRequest = undefined;
+      status('Оставлен текущий набор без последних правок.');
+      break;
+    case 'dialogReply':
+      lastRequest = undefined;
+      lastModelRequest = undefined;
+      addMessage('componentChat', 'GigaCode', message.reply);
+      break;
+    case 'prepared':
+      lastModelRequest = { prompt: message.prompt, responseType: 'review' };
+      status(message.repairing ? 'Исправляю формат ответа GigaCode…' : 'GigaCode подбирает компоненты…');
+      try {
+        post('review', { raw: await requestModel(message.prompt) });
+        return;
+      } catch (error) {
+        status(error.message, true);
+        finishPending(error.message);
+      }
+      break;
+    case 'proposal':
+      lastRequest = undefined;
+      lastModelRequest = undefined;
+      stage = 'list';
+      componentCount = message.items.length;
+      renderProposal(message.items);
+      readDraft = undefined;
+      $('planTitle').textContent = 'Текущий набор компонентов';
+      $('revision').value = '';
+      if (message.changes?.length) addMessage('componentChat', 'GigaCode', 'Применённые изменения:\n' + message.changes.map(change => '• ' + change).join('\n'));
+      else addMessage('componentChat', 'GigaCode', message.reply || 'Набор компонентов показан ниже.');
+      if(message.notes?.length)addMessage('componentChat','Плагин',message.notes.map(note=>'• '+note).join('\n'));
+      $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
+      $('plan').hidden = false;
+      status(message.items.length ? '' : 'В предложении больше нет компонентов.');
+      break;
+    case 'copyRequest':
+      try {
+        post('reviewCopy', { raw: await requestModel(message.prompt) });
+        return;
+      } catch (error) {
+        status(error.message, true);
+        finishPending(error.message);
+      }
+      break;
+    case 'componentOpened':
+    case 'copyOpened':
+      stage = 'copy';
+      $('planTitle').textContent = 'Компонент ' + (message.index + 1) + ' из ' + message.total;
+      $('items').replaceChildren(renderItem(message.index, message.item));
+      if (message.type === 'copyOpened') {
+        $('revision').value = '';
+        addMessage('componentChat', 'GigaCode', [message.reply, ...message.item.fields.filter(field => field.type === 'TEXT' && field.value).map(field =>
+          field.key.replace(/#.*$/, '') + ' — ' + field.value), ...message.item.copy.map(copy =>
+          copy.title + ' — ' + copy.value), message.item.error].filter(Boolean).join('\n'));
+      }
+      status('');
+      break;
+    case 'itemPreview':
+      if (stage === 'copy') replacePreview?.({ ...message.item, previewDeferred:false, pending: Boolean(message.item.previewId) });
+      return;
+    case 'previewProgress':
+      if (activePreviewId === message.previewId) {
+        previewStage = message.stage;
+        const note = $('items').querySelector('[data-preview-status]');
+        if (note) note.textContent = message.stage + '…';
+      }
+      return;
+    case 'previewRendered':
+      if (stage === 'copy' && activePreviewId === message.item.previewId) replacePreview?.(message.item);
+      return;
+    case 'itemConfigured':
+      $('items').replaceChildren(renderItem(message.index, message.item));
+      status('');
+      break;
+    case 'readyToApply':
+      clearTimeout(imageTimer);
+      if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
+      activePreviewId = undefined;
+      stage = 'ready';
+      renderProposal(message.items || []);
+      $('planTitle').textContent = 'Компоненты согласованы';
+      status('');
+      break;
+    case 'applied':
+      hasSource = true;
+      layoutLocked = false;
+      stage = 'done';
+      addMessage('componentChat', 'Плагин', 'Добавлено компонентов: ' + message.count + ' · ' + message.target);
+      status('');
+      break;
+    case 'formPlaced':
+      hasSource = false;
+      layoutLocked = false;
+      clearFlow();
+      clearTimeout(placementTimer);
+      placementTimer = undefined;
+      formPlaced = true;
+      $('formSetup').hidden = false;
+      $('modelSettings').open = !$('token').value.trim();
+      status('LightBox ' + message.size + ' поставлен.');
+      break;
+    case 'error':
+      if (!$('plan').hidden) addMessage('componentChat', 'Плагин', message.message);
+      clearTimeout(placementTimer);
+      placementTimer = undefined;
+      status(message.message, true);
+      break;
+    default:
+      return;
+  }
+  if (pendingMessage) {
+    pendingMessage.remove();
+    pendingMessage = null;
+  }
+  setBusy(false);
+  saveSessionUI();
+
+  } catch (error) {
+    clearTimeout(imageTimer);
+    if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
+    activePreviewId = undefined;
+    const detail = 'Ошибка отображения (' + message.type + '): ' + (error.message || String(error));
+    status(detail, true);
+    finishPending(detail);
+    setBusy(false);
+  }
+});
+
+
+$('backComponent').onclick=()=>{if(!busy){setBusy(true);post('backComponent');}};
+$('sizeToggle').onclick=()=>{
+  const open=$('sizeOptions').hidden;
+  $('sizeOptions').hidden=!open;
+  $('sizeToggle').setAttribute('aria-expanded',String(open));
+  $('sizeCaption').hidden=!open&&!selectedSize();
+  $('sizeValue').textContent=selectedSize()||(open?'Выберите из списка':'Размер формы');
+};
+$('sizeOptions').querySelectorAll('button').forEach(button=>button.onclick=()=>{
+  if(busy)return;
+  $('lightboxSize').value=button.dataset.size;
+  $('sizeValue').textContent=button.dataset.size;
+  $('sizeCaption').hidden=false;
+  $('sizeOptions').hidden=true;
+  $('sizeToggle').setAttribute('aria-expanded','false');
+  $('lightboxSize').dispatchEvent(new Event('input'));
+  $('place').onclick();
+});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){$('sizeOptions').hidden=true;$('sizeToggle').setAttribute('aria-expanded','false');}});
+document.addEventListener('click',event=>{if(!$('sizeField').contains(event.target)){$('sizeOptions').hidden=true;$('sizeToggle').setAttribute('aria-expanded','false');}});
+
+setBusy(false);
+status('');
+post('init');
+</script>
+</body>
+</html>

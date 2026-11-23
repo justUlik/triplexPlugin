@@ -1,0 +1,6 @@
+{
+  "name": "ChatToDesign · v2",
+  "id": "triplex-screen-builder-v2-local",
+  "main": "./main.js",
+  "ui": "./ui.html"
+}
