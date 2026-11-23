@@ -349,12 +349,12 @@ module._compile(source + `
    assert.equal(app.run('flow.states[0].variants[0].variant'),'Size=MD, Theme=Light, State=Focus');
    assert.equal(app.run('flow.states[1].variants[0].variant'),'Size=MD, Theme=Light, State=Error');
  });
- test('ambiguous state names cannot choose an arbitrary candidate',()=>{
+ test('short state selectors retain other current axes when this identifies one variant',()=>{
    const app=stateVariantFixture();
    const second={...app.set.children[1],key:'variant-other',name:'Size=MD, Theme=Light, State=Focus, Filled=True'};
    app.source.children[0].mainComponent.name+=' , Filled=False';
    app.set.children[1].name+=' , Filled=False';app.set.children.push(second);
-   assert.throws(()=>app.run('resolveStateVariant(field,{variant:"Focus"})'),/неоднозначно/);
+   assert.equal(app.run('resolveStateVariant(field,{variant:"Focus"}).key'),'variant-1');
  });
 
  test('manual component text is synchronized before insertion and subsequent state requests',async()=>{
@@ -439,5 +439,77 @@ module._compile(source + `
    await app.run('openProperties()');
    await app.run('configureItem({index:0,variant:1,values:{"Label#1":"Последняя ручная правка"}},false)');
    assert.equal(app.run('prepared.items[0].values["Label#new"]'),'Последняя ручная правка');assert.equal(app.run('prepared.items[0].text'),'Последняя ручная правка');
+ });
+
+ function realTriplexAxesFixture() {
+   const app=statePreviewFixture();
+   const set={type:'COMPONENT_SET',name:'NumberField',children:[]};
+   const names=[
+     'Size=LG, State=Default, Filled=False, Warning=False, Error=False, Darkmode=False',
+     'Size=LG,State=Hover,Filled=False,Warning=False,Error=False,Darkmode=False',
+     'Size=LG,State=Active,Filled=False,Warning=False,Error=False,Darkmode=False',
+     'Size=LG,State=Active,Filled=True,Warning=False,Error=False,Darkmode=False',
+     'Size=LG, State=Default, Filled=True, Warning=False, Error=False, Darkmode=False',
+     'Size=LG,State=Hover,Filled=True,Warning=False,Error=False,Darkmode=False',
+     'Size=LG,State=Default,Filled=False,Warning=False,Error=True,Darkmode=False',
+     'Size=LG,State=Default,Filled=True,Warning=False,Error=True,Darkmode=False',
+     'Size=LG,State=Active,Filled=True,Warning=False,Error=True,Darkmode=False',
+     'Size=LG,State=Active,Filled=True,Warning=True,Error=False,Darkmode=False',
+     'Size=LG,State=Active,Filled=True,Warning=False,Error=False,Darkmode=True',
+     'Size=SM,State=Active,Filled=True,Warning=False,Error=False,Darkmode=False'
+   ];
+   set.children=names.map((name,i)=>({type:'COMPONENT',name,key:'real-'+i,parent:set,componentPropertyDefinitions:{'Label#1':{type:'TEXT',defaultValue:'Label'}}}));
+   app.source.children[0].mainComponent=set.children[0];app.ctx.field=app.source.children[0];
+   app.run('approvedSource.signature=layoutSignature(pixso.getNodeById("source"))');
+   return {...app,set};
+ }
+ test('reported Triplex axes resolve partial states while retaining size and dark mode',()=>{
+   const app=realTriplexAxesFixture();
+   assert.equal(app.run('resolveStateVariant(field,{variant:"Active"}).key'),'real-2');
+   assert.equal(app.run('resolveStateVariant(field,{axes:{State:"Active",Filled:true}}).key'),'real-3');
+   assert.equal(app.run('resolveStateVariant(field,{axes:{Error:true,Filled:false}}).key'),'real-6');
+   assert.equal(app.run('resolveStateVariant(field,{variant:"Error"}).key'),'real-6');
+   assert.throws(()=>app.run('resolveStateVariant(field,{axes:{State:"Active",Darkmode:true}})'),/не найдено/);
+   assert.throws(()=>app.run('resolveStateVariant(field,{key:"real-11"})'),/размер/);
+   assert.throws(()=>app.run('resolveStateVariant(field,{variant:""})'),/не указано нужное состояние/);
+ });
+ test('empty optional names do not invalidate a valid variant key or axis selector',async()=>{
+   const app=realTriplexAxesFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   await app.run('reviewFlow({raw:JSON.stringify({states:[{name:"Ввод количества",condition:"Фокус и ввод",variants:[{field:1,key:"real-3",variant:""}],values:{"1":"10"}},{name:"Активное поле",condition:"Фокус",variants:[{field:1,variant:" ",axes:{State:"Active",Filled:false}}]}]})})');
+   assert.equal(app.messages.at(-1).type,'flowProposal');
+   assert.equal(app.run('flow.states[0].variants[0].key'),'real-3');
+   assert.match(app.run('flow.states[1].variants[0].variant'),/State=Active,Filled=False/);
+ });
+ test('blank error variant placeholders resolve Error=True as a real independent axis',async()=>{
+   const app=realTriplexAxesFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   await app.run('reviewFlow({raw:JSON.stringify({states:[{name:"Нет количества",condition:"Отправка без количества",values:{"1":""},variants:[{field:1,variant:""}],errors:[{field:1,text:"Введите количество"}]}]})})');
+   assert.equal(app.messages.at(-1).type,'flowProposal');
+   assert.match(app.run('flow.states[0].variants[0].variant'),/Error=True/);
+   assert.match(app.run('flow.states[0].variants[0].variant'),/Filled=False/);
+   assert.equal(app.run('flow.states[0].variants[0].variant.includes("Darkmode=True")'),false);
+ });
+ test('active typing and error controls are populated for the exact reported variant names',()=>{
+   const app=realTriplexAxesFixture();
+   assert.equal(app.run('componentStateCapabilities(field).controls.active.variants[0].key'),'real-3');
+   assert.equal(app.run('componentStateCapabilities(field).controls.error.variants[0].key'),'real-7');
+   assert.equal(app.run('stateControl(field,"error",false).variants[0].key'),'real-6');
+ });
+ test('equally close state candidates are still rejected instead of choosing the first',()=>{
+   const app=realTriplexAxesFixture();
+   app.set.children=app.set.children.filter((variant,i)=>[0,8,9].includes(i));
+   assert.throws(()=>app.run('resolveStateVariant(field,{axes:{State:"Active",Filled:true}})'),/несколько состояний/);
+ });
+
+ test('reported error variant renders with preserved manual label and Description error text',async()=>{
+   const app=realTriplexAxesFixture();const sourceField=app.source.children[0];
+   sourceField.componentProperties['Label#1'].value='Моё количество';sourceField.componentProperties['Description#1']={type:'TEXT',value:'Моя подсказка'};
+   const copy=app.source.clone(),field=copy.children[0];
+   field.mainComponent=app.set.children[0];field.componentProperties=JSON.parse(JSON.stringify(sourceField.componentProperties));
+   field.swapComponent=variant=>{field.mainComponent=variant;field.componentProperties={'Label#new':{type:'TEXT',value:'Label'},'Value#new':{type:'TEXT',value:'Default'},'Error#new':{type:'TEXT',value:''},'Description#new':{type:'TEXT',value:'Description'},'ShowError#new':{type:'BOOLEAN',value:true}};};
+   app.ctx.copy=copy;
+   await app.run('applyStateToCopy(copy,{name:"Пустое количество",condition:"Проверка",values:{"1":""},variants:[{field:"1",key:"real-6"}],errors:[{field:"1",text:"Укажите количество"}]},pixso.getNodeById("source"))');
+   assert.equal(field.mainComponent.key,'real-6');assert.equal(field.componentProperties['Label#new'].value,'Моё количество');
+   assert.equal(field.componentProperties['Value#new'].value,'');assert.equal(field.componentProperties['Description#new'].value,'Укажите количество');
+   assert.equal(sourceField.componentProperties['Description#1'].value,'Моя подсказка');
  });
 `, __filename);
