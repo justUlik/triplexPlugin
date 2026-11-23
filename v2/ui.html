@@ -1017,7 +1017,7 @@ window.addEventListener('message', async event => {
       creatingApprovedStates=false;
       flowApproved = false;
       hasFlowDraft = false;
-      if(message.components){status('Добавлено вариантов компонентов: '+message.count);break;}
+      if(message.components){status('Добавлено вариантов компонентов: '+message.count+(message.skipped?' · Пропущено: '+message.skipped:''));break;}
       status('Создано фреймов: ' + message.count + (message.skipped ? ' · Не удалось заполнить значений: ' + message.skipped : '') +
         (message.errorsPending ? ' · Ошибок в подписи под фреймом (нет свойства в компоненте): ' + message.errorsPending : ''));
       break;

@@ -541,12 +541,22 @@ module._compile(source + `
    assert.equal(app.messages.at(-1).component,true);assert.ok(app.messages.at(-1).png);
    await app.run('previewFlowState({index:0,previewId:2})');assert.equal(made.length,1);
  });
- test('component generation adds individual components and rolls back on an unrenderable error',async()=>{
+ test('component generation keeps successful instances and continues after an unsupported state',async()=>{
    const {app,made}=componentRenderFixture();
    app.run('flow.selected=flow.states;flowApproved=true');await app.run('createStates()');
    assert.equal(made.length,1);assert.equal(made[0].removed,undefined);assert.equal(app.messages.at(-1).components,true);
-   app.run('flow.selected=[flow.states[0],{...flow.states[0],field:"missing"}];flowApproved=true');
-   await assert.rejects(app.run('createStates()'),/Компонент больше не доступен/);
-   assert.equal(made[1].removed,true);assert.equal(made[0].removed,undefined);
+   app.run('flow.selected=[flow.states[0],{...flow.states[0],field:"missing"},flow.states[0]];flowApproved=true');
+   await app.run('createStates()');
+   assert.equal(made.length,3);assert.equal(made.every(copy=>!copy.removed),true);
+   assert.equal(app.messages.at(-1).count,2);assert.equal(app.messages.at(-1).skipped,1);
+   assert.equal(app.messages.at(-1).groups,1);assert.equal(made[2].y,made[1].y+made[1].height+32);
+ });
+ test('unrenderable values are removed individually and an entirely skipped batch reports zero',async()=>{
+   const {app,source,made}=componentRenderFixture(),clone=source.children[0].clone;
+   source.children[0].clone=()=>{const copy=clone();delete copy.componentProperties['Value#1'];return copy;};
+   app.run('flow.selected=flow.states;flowApproved=true');await app.run('createStates()');
+   assert.equal(made[0].removed,true);assert.equal(app.messages.at(-1).count,0);
+   assert.equal(app.messages.at(-1).skipped,1);assert.equal(app.messages.at(-1).groups,0);
+   assert.match(app.messages.at(-1).skippedStates[0].reason,/Не удалось применить значение/);
  });
 `, __filename);

@@ -2560,19 +2560,34 @@ async function previewComponentState({index,edits,previewId}) {
 async function createComponentStates() {
   const source=lockedSource();
   if(!flowApproved||!flow?.selected?.length)throw new Error('Выберите и утвердите состояния компонентов.');
-  const copies=[],columns=new Map();let columnX=source.x+source.width+48;
+  const copies=[],columns=new Map(),skippedStates=[];let columnX=source.x+source.width+48;
   try {
     for(const state of flow.selected) {
-      let column=columns.get(state.field);
-      if(!column){const field=sourceFields(source).find(node=>node.getPluginData('triplex-field-id')===state.field);if(!field)throw new Error('Компонент больше не доступен.');column={x:columnX,y:source.y};columns.set(state.field,column);columnX+=field.width+48;}
-      const copy=await makeComponentState(source,state);copies.push(copy);
-      copy.x=column.x;copy.y=column.y;column.y+=copy.height+32;
-      copy.name=(copyContext(sourceFields(source).find(node=>node.getPluginData('triplex-field-id')===state.field)).label||'Компонент')+' / '+state.name+(state.errors[0]?' / '+state.errors[0].text:'');
       lockedSource();
+      let copy;
+      try {
+        const field=sourceFields(source).find(node=>node.getPluginData('triplex-field-id')===state.field);
+        if(!field)throw new Error('Компонент больше не доступен.');
+        copy=await makeComponentState(source,state);
+        let column=columns.get(state.field);
+        const isNewColumn=!column;
+        if(!column)column={x:columnX,y:source.y};
+        copy.x=column.x;copy.y=column.y;
+        copy.name=(copyContext(field).label||'Компонент')+' / '+state.name+(state.errors[0]?' / '+state.errors[0].text:'');
+        lockedSource();
+        if(isNewColumn){columns.set(state.field,column);columnX+=Math.max(field.width,copy.width)+48;}
+        column.y+=copy.height+32;
+        copies.push(copy);
+      } catch(error) {
+        if(copy&&!copy.removed)copy.remove();
+        // A changed source invalidates the batch; an unsupported individual state does not.
+        lockedSource();
+        skippedStates.push({field:state.field,name:state.name,reason:error.message});
+      }
     }
   } catch(error){for(const copy of copies)if(!copy.removed)copy.remove();throw error;}
   flowApproved=false;
-  send('statesCreated',{count:copies.length,groups:columns.size,components:true,skipped:0,errorsPending:0});
+  send('statesCreated',{count:copies.length,groups:columns.size,components:true,skipped:skippedStates.length,skippedStates,errorsPending:0});
 }
 
 function validateStateBindings(state,nodes) {

@@ -79,7 +79,8 @@ assert.equal(await page.evaluate(()=>sent.filter(m=>m.type==='previewFlowState')
 await page.click('#approveFlow');assert.equal(await page.evaluate(()=>sent.at(-1).type),'approveFlow');
 assert.equal(await page.evaluate(()=>sent.at(-1).edits[1].errorTexts[0]),'Мой согласованный текст ошибки');
 await receive({type:'flowApproved'});assert.equal(await page.evaluate(()=>sent.at(-1).type),'createStates');
-await receive({type:'statesCreated',components:true,count:2,errorsPending:0,skipped:0});
+await receive({type:'statesCreated',components:true,count:2,errorsPending:0,skipped:1});
+assert.match(await page.locator('#status').textContent(),/Добавлено вариантов компонентов: 2 · Пропущено: 1/);
 await page.check('#stateModeAuto');assert.equal(await page.evaluate(()=>sent.at(-1).type),'requestStates');assert.equal(await page.evaluate(()=>sent.at(-1).mode),'auto');
 await receive({type:'flowProposal',mode:'auto',reply:'Варианты для поля количества.',fields:[{field:'1',component:'NumberField',label:'Количество ЦФА'}],labels:{'1':'Количество ЦФА'},states:[{name:'Активное печатание',condition:'Ввод количества',values:{'1':'10'},properties:[{field:'1',values:{Active:true}}],errors:[]}]});
 await renderQueuedStates();await page.screenshot({path:'/tmp/v2-states-auto.png',fullPage:true});
