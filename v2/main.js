@@ -2104,9 +2104,9 @@ function isReadOnly(name) {
 async function backComponent(draft) {
   if (!prepared || prepared.revisionPending || !['copy','ready'].includes(prepared.stage)) throw new Error('Возврат сейчас недоступен.');
   if (prepared.stage === 'copy') {
-    if (draft) await configureItem(draft, false, false);
+    await saveComponentDraft(draft);
     if (prepared.index === 0) {
-      activePreview?.cancel(); activePreview=undefined;
+      cancelActivePreview();
       prepared.stage='list';
       send('proposal', {items:prepared.items.map(describeSummary),reply:'Проверьте набор компонентов.'});
       return;
@@ -2485,8 +2485,7 @@ let activePreview;
 
 async function publishPreview(type, item, message, suggest = false) {
   await ensureComponentLabel(item.variants[item.variant]);
-  activePreview?.cancel();
-  activePreview=undefined;
+  cancelActivePreview();
   const component=item.variants[item.variant];
   let description=describeItem(item,suggest);
   const previewId=++previewSequence;
@@ -2589,8 +2588,11 @@ async function apply() {
 }
 
 let messageQueue = Promise.resolve();
+// Recover after an unexpected rejection so later editor commands still run.
 pixso.ui.onmessage = message => {
-  messageQueue = messageQueue.then(() => handleMessage(message));
+  messageQueue = messageQueue
+    .then(() => handleMessage(message))
+    .catch(error => reportCommandError(message, error, false));
 };
 
 function removePlannedItem(uid) {
@@ -2599,7 +2601,7 @@ function removePlannedItem(uid) {
   const index = prepared.items.findIndex(item => item.uid === uid);
   if (index < 0) throw new Error('Компонент уже удалён или больше не входит в набор.');
   const item = prepared.items[index];
-  activePreview?.cancel(); activePreview = undefined;
+  cancelActivePreview();
   prepared.items = prepared.items.filter(candidate => candidate.uid !== uid);
   prepared.stage = 'list'; prepared.index = 0;
   const change = 'Удалён: ' + item.text + ' · ' + item.name;
@@ -2608,130 +2610,141 @@ function removePlannedItem(uid) {
   send('proposal', { target:pixso.getNodeById(prepared.bodyId)?.name, items:prepared.items.map(describeSummary), changes:[change], revisionPending:false });
 }
 
-async function handleCommand(message) {
-  try {
-    switch (message.type) {
-      case 'init':
-        send('ready', { lightboxSizes });
-        break;
-      case 'lockLayout': {
-        if (!approvedSource) throw new Error('Сначала добавьте компоненты на фрейм.');
-        const source = getActiveForm(approvedSource.frameId);
-        approvedSource.signature = layoutSignature(source);
-        source.locked = true;
-        flow = null; pendingFlow = null; flowApproved = false;
-        send('layoutLocked');
-        break;
-      }
-      case 'unlockLayout': {
-        if (approvedSource) {
-          getActiveForm(approvedSource.frameId).locked = false;
-          delete approvedSource.signature;
-        }
-        flow = null; pendingFlow = null; flowApproved = false;
-        send('layoutUnlocked');
-        break;
-      }
-      case 'requestFlow':
-        requestFlow(message);
-        break;
-      case 'reviewFlow':
-        reviewFlow(message);
-        break;
-      case 'invalidateFlow':
-        pendingFlow = null;
-        flowApproved = false;
-        break;
-      case 'approveFlow':
-        if (pendingFlow || !flow?.states.length) throw new Error('Сначала получите список состояний для утверждения.');
-        lockedSource();
-        flow.selected = selectFlow(message.selection,editedFlowStates(message.edits));
-        if (!flow.selected.length) throw new Error('Выберите хотя бы одно состояние или ошибку.');
-        flowApproved = true;
-        send('flowApproved');
-        break;
-      case 'previewFlowState':
-        await previewFlowState(message);
-        break;
-      case 'createStates':
-        await createStates();
-        break;
-      case 'prepare':
-        prepared = null;
-        await prepare(message);
-        break;
-      case 'placeLightbox':
-        await placeLightbox(message.size);
-        break;
-      case 'removeItem':
-        removePlannedItem(message.uid);
-        break;
-      case 'discardRevision':
-        if (prepared) {
-          prepared.revisionPending = false;
-          conversation.push({ role: 'user', text: 'Последние правки отменены. Оставить текущий фактический набор без изменений.' });
-        }
-        send('revisionDiscarded');
-        break;
-      case 'dialog':
-        if (message.draft && prepared?.stage === 'copy') await configureItem(message.draft, false, false);
-        await requestConversation(message);
-        break;
-      case 'reviewDialog':
-        await reviewConversation(message.raw);
-        break;
-      case 'revise': {
-        const revision = typeof message.revision === 'string' ? message.revision.trim() : '';
-        if (prepared?.stage !== 'list' || !prepared.items || !revision || revision.length > 3000) {
-          throw new Error('Опишите правки к предложению (до 3000 символов).');
-        }
-        sendPlanRequest(revision);
-        break;
-      }
-      case 'review':
-        await review(message.raw);
-        break;
-      case 'backComponent':
-        await backComponent(message.draft);
-        break;
-      case 'openProperties':
-        await openProperties();
-        break;
-      case 'requestCopy':
-        if (message.draft && prepared?.stage === 'copy') await configureItem(message.draft, false, false);
-        requestCopy(message.revision);
-        break;
-      case 'reviewCopy':
-        await reviewCopy(message.raw);
-        break;
-      case 'renderPreview':
-        if (activePreview?.previewId === message.previewId) activePreview.start();
-        break;
-      case 'cancelPreview':
-        if (activePreview?.previewId === message.previewId) {
-          activePreview.cancel();
-          activePreview = undefined;
-        }
-        break;
-      case 'chooseVariant':
-      case 'previewItem':
-      case 'confirmItem':
-        await configureItem(message, message.type === 'confirmItem');
-        break;
-      case 'unconfirmItem':
-        if (prepared?.items?.[message.index]) prepared.items[message.index].confirmed = false;
-        break;
-      case 'apply':
-        await apply();
-        break;
-    }
-  } catch (error) {
-    try { if (requestLabelRepair(message, error)) return; } catch (repairError) { error = repairError; }
-    const stage = { prepare: 'Подготовка запроса', review: 'Проверка предложения', apply: 'Вставка полей' }[message.type];
-    const detail = error.message || String(error);
-    send('error', { message: stage ? stage + ' — ' + detail : detail, revisionPending: Boolean(prepared?.revisionPending) });
+function cancelActivePreview(previewId = activePreview?.previewId) {
+  if (!activePreview || activePreview.previewId !== previewId) return;
+  activePreview.cancel();
+  activePreview = undefined;
+}
+
+function invalidateFlow() {
+  pendingFlow = null;
+  flowApproved = false;
+}
+
+function lockLayout() {
+  if (!approvedSource) throw new Error('Сначала добавьте компоненты на фрейм.');
+  const source = getActiveForm(approvedSource.frameId);
+  approvedSource.signature = layoutSignature(source);
+  source.locked = true;
+  flow = null;
+  invalidateFlow();
+  send('layoutLocked');
+}
+
+function unlockLayout() {
+  if (approvedSource) {
+    getActiveForm(approvedSource.frameId).locked = false;
+    delete approvedSource.signature;
   }
-};
+  flow = null;
+  invalidateFlow();
+  send('layoutUnlocked');
+}
+
+function approveFlow(message) {
+  if (pendingFlow || !flow?.states.length) throw new Error('Сначала получите список состояний для утверждения.');
+  lockedSource();
+  flow.selected = selectFlow(message.selection, editedFlowStates(message.edits));
+  if (!flow.selected.length) throw new Error('Выберите хотя бы одно состояние или ошибку.');
+  flowApproved = true;
+  send('flowApproved');
+}
+
+function discardRevision() {
+  if (prepared) {
+    prepared.revisionPending = false;
+    conversation.push({ role: 'user', text: 'Последние правки отменены. Оставить текущий фактический набор без изменений.' });
+  }
+  send('revisionDiscarded');
+}
+
+async function saveComponentDraft(draft) {
+  if (draft && prepared?.stage === 'copy') await configureItem(draft, false, false);
+}
+
+function revisePlan(message) {
+  const revision = typeof message.revision === 'string' ? message.revision.trim() : '';
+  if (prepared?.stage !== 'list' || !prepared.items || !revision || revision.length > 3000) {
+    throw new Error('Опишите правки к предложению (до 3000 символов).');
+  }
+  sendPlanRequest(revision);
+}
+
+const commandHandlers = new Map(Object.entries({
+  init: () => send('ready', { lightboxSizes }),
+  lockLayout,
+  unlockLayout,
+  requestFlow,
+  reviewFlow,
+  invalidateFlow,
+  approveFlow,
+  previewFlowState,
+  createStates: () => createStates(),
+  prepare: message => { prepared = null; return prepare(message); },
+  placeLightbox: message => placeLightbox(message.size),
+  removeItem: message => removePlannedItem(message.uid),
+  discardRevision,
+  dialog: async message => {
+    await saveComponentDraft(message.draft);
+    await requestConversation(message);
+  },
+  reviewDialog: message => reviewConversation(message.raw),
+  revise: revisePlan,
+  review: message => review(message.raw),
+  backComponent: message => backComponent(message.draft),
+  openProperties: () => openProperties(),
+  requestCopy: async message => {
+    await saveComponentDraft(message.draft);
+    requestCopy(message.revision);
+  },
+  reviewCopy: message => reviewCopy(message.raw),
+  renderPreview: message => {
+    // Rendering runs outside the command queue so cancel/edit can interrupt an export.
+    if (activePreview?.previewId === message.previewId) {
+      activePreview.start()?.catch(error => reportCommandError(message, error, false));
+    }
+  },
+  cancelPreview: message => {
+    if (activePreview?.previewId === message.previewId) cancelActivePreview(message.previewId);
+  },
+  chooseVariant: message => configureItem(message, false),
+  previewItem: message => configureItem(message, false),
+  confirmItem: message => configureItem(message, true),
+  unconfirmItem: message => {
+    if (prepared?.items?.[message.index]) prepared.items[message.index].confirmed = false;
+  },
+  apply: () => apply()
+}));
+
+const commandErrorStages = new Map([
+  ['prepare', 'Подготовка запроса'],
+  ['review', 'Проверка предложения'],
+  ['apply', 'Вставка полей']
+]);
+
+function reportCommandError(message, error, allowRepair = true) {
+  if (allowRepair) {
+    try {
+      if (requestLabelRepair(message, error)) return;
+    } catch (repairError) { error = repairError; }
+  }
+  const stage = commandErrorStages.get(message?.type);
+  const detail = error?.message || String(error);
+  send('error', {
+    message: stage ? stage + ' — ' + detail : detail,
+    revisionPending: Boolean(prepared?.revisionPending)
+  });
+}
+
+async function handleCommand(message) {
+  const handler = commandHandlers.get(message?.type);
+  if (!handler) return;
+  try {
+    await handler(message);
+  } catch (error) {
+    reportCommandError(message, error);
+  }
+}
 
 const historyKey = 'triplex-dialog-history-v2';
 let sessionId;
@@ -2806,7 +2819,7 @@ function persistSession() {
   send('historySaved', { sessionId });
 }
 function newSession() {
-  activePreview?.cancel(); activePreview = undefined;
+  cancelActivePreview();
   lastPersistedSessionId=lastPersistedSnapshot=undefined;
   sessionId = undefined; sessionUI = {}; sessionReadOnly = false; sessionCreatedAt = undefined;
   prepared = null; conversation = []; flow = null; pendingFlow = null; approvedSource = null;
@@ -2858,7 +2871,7 @@ async function restoreSession(id) {
       plan={...plan,items};
     }
   } catch(error) { warning = error.message + ' История доступна для чтения; восстановите фрейм/библиотеку и откройте диалог заново.'; }
-  activePreview?.cancel(); activePreview = undefined;
+  cancelActivePreview();
   lastPersistedSessionId=lastPersistedSnapshot=undefined;
   sessionId=id; sessionCreatedAt=entry.createdAt; sessionUI=cleanSessionUI(snapshot.ui); sessionReadOnly=Boolean(warning);
   prepared = warning ? null : plan; conversation=state.conversation || []; itemSequence=state.itemSequence || 0;
@@ -2881,36 +2894,73 @@ async function restoreSession(id) {
     index:plan?.index || 0 });
 }
 
+function sendHistoryList() {
+  send('historyList', { sessions: readHistory().sessions });
+}
+
+function reportHistoryError(error, prefix = '') {
+  send('historyError', { message: prefix + (error?.message || String(error)) });
+}
+
+const historyHandlers = new Map(Object.entries({
+  saveSessionUI: message => {
+    if (sessionReadOnly) return;
+    sessionUI = cleanSessionUI(message.ui);
+    persistSession();
+  },
+  listHistory: sendHistoryList,
+  openSession: async message => {
+    persistSession();
+    await restoreSession(message.id);
+  },
+  newSession: () => {
+    persistSession();
+    newSession();
+    send('sessionRestored', { ui: {}, items: [], stage: 'list' });
+    sendHistoryList();
+  }
+}));
+
+// Preview traffic must not rewrite history for every exported image.
+const transientCommands = new Set(['renderPreview', 'cancelPreview', 'previewItem', 'previewFlowState']);
+const measuredCommands = new Set(['dialog', 'prepare', 'review', 'reviewDialog', 'openProperties', 'previewItem', 'chooseVariant', 'previewFlowState']);
+const modelRequestCommands = new Set(['dialog', 'prepare']);
+
 async function handleMessage(message) {
+  if (!message || typeof message !== 'object' || typeof message.type !== 'string') return;
   if (message.type === 'init') {
     await handleCommand(message);
-    try { send('historyList', { sessions:readHistory().sessions }); } catch(error) { send('historyError',{message:error.message}); }
+    try { sendHistoryList(); } catch (error) { reportHistoryError(error); }
     return;
   }
-  if (['saveSessionUI','listHistory','openSession','newSession'].includes(message.type)) {
-    try {
-      if (message.type === 'saveSessionUI') { if(!sessionReadOnly) { sessionUI=cleanSessionUI(message.ui); persistSession(); } }
-      if (message.type === 'listHistory') send('historyList',{sessions:readHistory().sessions});
-      if (message.type === 'openSession') { persistSession(); await restoreSession(message.id); }
-      if (message.type === 'newSession') { persistSession(); newSession(); send('sessionRestored',{ui:{},items:[],stage:'list'}); send('historyList',{sessions:readHistory().sessions}); }
-    } catch(error) { send('historyError',{message:error.message}); }
+  const historyHandler = historyHandlers.get(message.type);
+  if (historyHandler) {
+    try { await historyHandler(message); } catch (error) { reportHistoryError(error); }
     return;
   }
-  if(message.type==='dialog' || message.type==='prepare') {
-    send('requestProgress',{message:'Pixso получил правки. Готовлю контекст для GigaCode…'});
-    if(message.ui && !sessionReadOnly) sessionUI=cleanSessionUI(message.ui);
+  if (!commandHandlers.has(message.type)) return;
+  if (modelRequestCommands.has(message.type)) {
+    send('requestProgress', { message: 'Pixso получил правки. Готовлю контекст для GigaCode…' });
+    if (message.ui && !sessionReadOnly) sessionUI = cleanSessionUI(message.ui);
   }
-  if (sessionReadOnly) { send('error',{message:'Этот диалог открыт только для чтения. Восстановите исходный фрейм или начните новый диалог.'}); return; }
-  if (message.type==='placeLightbox' && activeFormId && sessionId) {
-    try { persistSession(); newSession(); } catch(error) { send('historyError',{message:error.message});return; }
+  if (sessionReadOnly) {
+    send('error', { message: 'Этот диалог открыт только для чтения. Восстановите исходный фрейм или начните новый диалог.' });
+    return;
   }
-  const editorStartedAt=Date.now();
+  if (message.type === 'placeLightbox' && activeFormId && sessionId) {
+    try { persistSession(); newSession(); } catch (error) { reportHistoryError(error); return; }
+  }
+  const startedAt = Date.now();
   await handleCommand(message);
-  const editorPreparedAt=Date.now();
-  if (!['renderPreview','cancelPreview','previewItem','previewFlowState'].includes(message.type)) {
-    try { persistSession(); } catch(error) { send('historyError',{message:'Не удалось сохранить диалог: '+error.message}); }
+  const preparedAt = Date.now();
+  if (!transientCommands.has(message.type)) {
+    try { persistSession(); } catch (error) { reportHistoryError(error, 'Не удалось сохранить диалог: '); }
   }
-  if(['dialog','prepare','review','reviewDialog','openProperties','previewItem','chooseVariant','previewFlowState'].includes(message.type)) {
-    send('editorMetrics',{operation:message.type,prepareMs:editorPreparedAt-editorStartedAt,saveMs:Date.now()-editorPreparedAt});
+  if (measuredCommands.has(message.type)) {
+    send('editorMetrics', {
+      operation: message.type,
+      prepareMs: preparedAt - startedAt,
+      saveMs: Date.now() - preparedAt
+    });
   }
 }

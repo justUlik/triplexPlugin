@@ -24,4 +24,42 @@ module._compile(source + `
    assert.equal(app.run('prepared.stage'),'list');
    assert.equal(app.messages.at(-1).type,'proposal');
  });
+
+ test('v2 ignores malformed and unknown commands without persisting state',async()=>{
+   const app=backend();
+   app.run('persistSession=()=>{throw Error("Unexpected write")};');
+   for(const message of [null,undefined,[],{}, {type:1},{type:'unknown'},{type:'toString'},{type:'__proto__'}]) {
+     app.ctx.input=message;
+     await app.run('handleMessage(input)');
+   }
+   assert.equal(app.messages.length,0);
+ });
+ test('v2 queue recovers after unexpected handler failure and keeps command order',async()=>{
+   const app=backend();
+   app.run('handleMessage=async message=>{if(message.type==="fail")throw Error("Unexpected failure");send(message.type)}');
+   app.ctx.pixso.ui.onmessage({type:'fail'});
+   app.ctx.pixso.ui.onmessage({type:'first'});
+   app.ctx.pixso.ui.onmessage({type:'second'});
+   await app.run('messageQueue');
+   assert.deepEqual(app.messages.map(m=>m.type),['error','first','second']);
+   assert.equal(app.messages[0].message,'Unexpected failure');
+ });
+ test('v2 cancellation can run while preview export is pending',async()=>{
+   const app=backend();
+   app.run('let cancelled=false;let finishExport;activePreview={previewId:42,start:()=>new Promise(resolve=>{finishExport=resolve}),cancel:()=>{cancelled=true}};');
+   app.ctx.pixso.ui.onmessage({type:'renderPreview',previewId:42});
+   app.ctx.pixso.ui.onmessage({type:'cancelPreview',previewId:42});
+   await app.run('messageQueue');
+   assert.equal(app.run('cancelled'),true);
+   assert.equal(app.run('activePreview'),undefined);
+   app.run('finishExport()');
+ });
+ test('v2 cancellation for old preview does not stop current preview',async()=>{
+   const app=backend();
+   app.run('let cancelled=false;activePreview={previewId:43,cancel:()=>{cancelled=true}}');
+   await app.run('handleCommand({type:"cancelPreview",previewId:42})');
+   await app.run('handleCommand({type:"cancelPreview"})');
+   assert.equal(app.run('cancelled'),false);
+   assert.equal(app.run('activePreview.previewId'),43);
+ });
 `, __filename);
