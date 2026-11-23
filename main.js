@@ -1144,7 +1144,25 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.7' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.8' });
+
+function yieldToEditor() { return new Promise(resolve=>setTimeout(resolve,0)); }
+const variantMetadataCache = new WeakMap();
+function variantMetadata(variants) {
+  let result=variantMetadataCache.get(variants);
+  if (!result) {
+    result={names:variants.map(component=>component.name),bindings:variants.map(component=>({id:component.id,key:component.key,name:component.name}))};
+    variantMetadataCache.set(variants,result);
+  }
+  return result;
+}
+function describeSummary(item) {
+  return {uid:item.uid,name:item.name,text:item.text,readOnly:isReadOnly(item.variants[item.variant].name),requestedReadOnly:item.readOnly};
+}
+function previewExportSettings(node) {
+  const extent=Math.max(Number(node.width)||1,Number(node.height)||1);
+  return {format:'PNG',constraint:{type:'SCALE',value:Math.min(1,960/extent)}};
+}
 
 function modelConversation(task = prepared?.task) {
   // The saved transcript is untouched. Older assistant prose repeats plans and
@@ -1181,7 +1199,7 @@ function requestKnowledgeCatalog(type, catalog) {
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {
-    const catalog = prepared?.catalog || formCatalog(activeLibraryAssets || []);
+    const catalog = prepared?.catalog || libraryCatalog(activeLibraryAssets);
     const scopedCatalog=requestKnowledgeCatalog(type,catalog);
     const scope=type==='copyRequest'?'copy':type==='flowRequest'?'states':'catalog';
     const prompt=withTriplexKnowledge(data.prompt,scopedCatalog,scope);
@@ -1211,6 +1229,14 @@ function componentKnowledge(asset) {
   return null;
 }
 
+const libraryCatalogCache = new WeakMap();
+function libraryCatalog(assets) {
+  if(!Array.isArray(assets))return [];
+  let catalog=libraryCatalogCache.get(assets);
+  if(!catalog){catalog=formCatalog(assets);libraryCatalogCache.set(assets,catalog);}
+  return catalog;
+}
+
 function formCatalog(assets) {
   const candidates = new Map();
   const supported = assets.filter(asset => asset.key && ['COMPONENT', 'COMPONENT_SET'].includes(asset.type));
@@ -1224,7 +1250,7 @@ function formCatalog(assets) {
     const doc = componentKnowledge(asset);
     candidates.set(asset.key, { key: asset.key, type: asset.type, name: path,
       use: doc?.use || 'Назначение не подтверждено справочником. Не считать TextField; уточнить смысл перед выбором.',
-      knowledgeName: doc?.name || null, variants: asset.variants });
+      knowledgeName: doc?.name || null, variants: asset.variants?.map(({key,id,name})=>({key,id,name})) });
   }
   return [...candidates.values()];
 }
@@ -1343,7 +1369,8 @@ async function previewFlowState({ index, edits, selection, previewId }) {
     copy=source.clone();copy.locked=false;copy.x=source.x+source.width+48;copy.y=source.y;
     const result=applyStateToCopy(copy,state,source);
     if(typeof copy.exportAsync!=='function')throw new Error('Pixso не поддерживает экспорт превью.');
-    const png=await copy.exportAsync({format:'PNG'});
+    await yieldToEditor();
+    const png=await copy.exportAsync(previewExportSettings(copy));
     lockedSource();
     send('flowPreview',{index,previewId,png:Array.from(png),annotations:result.annotations,errorsPending:result.errorsPending,skipped:result.skipped});
   } catch(error) {send('flowPreview',{index,previewId,error:error.message});}
@@ -1494,7 +1521,7 @@ async function prepare({ task, standard }) {
   }
   getActiveForm(frame.id);
   if (!isFormBody(frame, body)) throw new Error('Фрейм изменился. Запросите компоненты заново.');
-  const catalog = formCatalog(activeLibraryAssets || []);
+  const catalog = libraryCatalog(activeLibraryAssets);
   if (!catalog.length) throw new Error('Pixso не вернул доступные компоненты из библиотеки установленного LightBox (кнопки исключены).');
   conversation = [{ role: 'user', text: task.trim() }];
   prepared = { frameId: frame.id, bodyId: body.id, catalog, task: task.trim(), standard: typeof standard === 'string' ? standard.trim().slice(0, 8000) : flow?.standard };
@@ -1593,6 +1620,9 @@ async function review(raw) {
   const parts = new Map();
   for (const id of new Set(items.map(item => item.id))) {
     const asset = prepared.catalog[id - 1];
+    const reused=prepared.items?.find(item=>item.id===id);
+    if(reused){parts.set(id,{variants:reused.variants,name:reused.name});continue;}
+    await yieldToEditor();
     let component;
     let set;
     try {
@@ -1621,7 +1651,7 @@ async function review(raw) {
     return { ...part, ...item, uid: ++itemSequence, variant: Math.max(0, variant) };
   });
   prepared.stage = "list";
-  const previews = prepared.items.map(item => describeItem(item));
+  const previews = prepared.items.map(describeSummary);
   conversation.push({ role: 'assistant', text: plan.reply || '' });
   if (!prepared.importOnly) send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: plan.reply });
 }
@@ -1674,6 +1704,7 @@ function resolveRemovalRequest(revision, items, catalog) {
 }
 
 async function requestConversation({ revision }) {
+  await yieldToEditor();
   if (!prepared?.items || typeof revision !== 'string' || !revision.trim()) throw new Error('Введите сообщение.');
   prepared.labelRepairAttempted = false;
   prepared.revisionPending = true;
@@ -1691,7 +1722,8 @@ async function requestConversation({ revision }) {
   }
   const configuring = prepared.stage !== 'list';
   const definitions = {};
-  const components = prepared.items.map(item => {
+  const components = [];
+  for (const item of prepared.items) {
     const result = {
       uid: item.uid, id: item.id, name: item.name, text: item.text, placeholder: item.placeholder,
       value: item.value, readOnly: item.readOnly, error: item.error,
@@ -1702,10 +1734,11 @@ async function requestConversation({ revision }) {
       result.variant = item.variant;
       result.fields = description.fields;
       result.values = item.values;
-      definitions[item.id] = description.variants;
+      if (!definitions[item.id]) definitions[item.id] = description.variants;
     }
-    return result;
-  });
+    components.push(result);
+    await yieldToEditor();
+  }
   send('dialogRequest', { prompt: [
     'Ты согласуешь форму с пользователем. Учитывай всю историю и текущие настройки. Последняя просьба уточняет предыдущие.',
     'Сначала сопоставь каждую просьбу с конкретным uid. Подпись text и тип name — разные признаки: одинаковая подпись может быть у Text, Amount и поля ввода. Пара строк «подпись / тип» обозначает один компонент. Удаление Amount не означает удаление Text с той же подписью. Удаление Island не означает удаление других строк набора: это плоский список, не дерево.',
@@ -1893,7 +1926,7 @@ async function reviewListRevision(response) {
   });
   const changesApplied = revisionSummary(context.items, nextItems);
   if (!changesApplied.length) throw new Error('Модель вернула прежний набор без изменений. Правки не применены. Повторите отправку или уточните запрос.');
-  const descriptions = nextItems.map(item => describeItem(item));
+  const descriptions = nextItems.map(describeSummary);
   context.items = nextItems;
   context.stage = 'list';
   context.index = 0;
@@ -1948,11 +1981,7 @@ async function reviewConversation(raw) {
       if (typeof change.readOnly !== 'boolean') throw new Error('Некорректный режим read-only.');
       candidate.readOnly = change.readOnly;
     }
-    if (variant !== current.variant) {
-      const instance = candidate.variants[variant].createInstance();
-      try { instanceLabels.set(candidate.variants[variant], findInstanceLabel(instance)); }
-      finally { instance.remove(); }
-    }
+    if (variant !== current.variant) await ensureComponentLabel(candidate.variants[variant]);
     const fields = new Map(editableProperties(candidate.variants[variant]));
     candidate.values = Object.fromEntries(Object.entries(current.values || {}).filter(([key]) => fields.has(key)));
     for (const [key, value] of Object.entries(change.values || {})) {
@@ -1975,7 +2004,7 @@ async function reviewConversation(raw) {
   conversation.push({ role: 'assistant', text: actualChanges.join('\n') });
   if (response.action === 'list' || context.stage === 'list') {
     context.stage = 'list';
-    send('proposal', { items: nextItems.map(item => describeItem(item)), reply: response.reply });
+    send('proposal', { items: nextItems.map(describeSummary), reply: response.reply });
   } else {
     send('dialogReply', { reply: actualChanges.join('\n'), revisionPending: false });
     if (response.action === 'configure') {
@@ -1998,9 +2027,11 @@ async function openProperties() {
 }
 
 async function openCurrentComponent() {
+  await yieldToEditor();
+  await ensureComponentLabel(prepared.items[prepared.index].variants[prepared.items[prepared.index].variant]);
   prepared.stage = 'copy';
   const { index, items } = prepared;
-  publishPreview('componentOpened', items[index], { index, total: items.length });
+  await publishPreview('componentOpened', items[index], { index, total: items.length });
 }
 
 function requestCopy(revision = '') {
@@ -2033,7 +2064,7 @@ async function reviewCopy(raw) {
     describeItem(current).fields.some(field => field.key === key && field.type === 'TEXT') && typeof value === 'string' && value.length <= 3000));
   const item = { ...current, texts, text: entry.text, placeholder: entry.placeholder, value: entry.value,
     error: '', confirmed: false };
-  const preview = publishPreview('copyOpened', item, { index, total: items.length, reply: entry.reply }, true);
+  const preview = await publishPreview('copyOpened', item, { index, total: items.length, reply: entry.reply }, true);
   item.values = { ...current.values, ...Object.fromEntries(preview.fields
     .filter(field => field.type === 'TEXT' && field.value != null).map(field => [field.key, field.value])) };
   items[index] = item;
@@ -2053,17 +2084,28 @@ function editableProperties(component) {
   return properties;
 }
 
-function findInstanceLabel(instance) {
-  const labels = [];
-  function visit(node, path) {
-    if (node.visible === false) return;
-    if (node.type === 'TEXT' && (isLabel(node.name) || isLabel(node.characters))) {
-      labels.push(['Label#layer:' + path.join('.'), { type: 'TEXT', defaultValue: node.characters }]);
+async function ensureComponentLabel(component) {
+  if(instanceLabels.has(component)||editableProperties(component).some(([key,prop])=>prop.type==='TEXT'&&isLabel(key)))return;
+  // Layer paths are relative to the component root, just as in its instance.
+  // Discover them once without materializing a temporary instance on the canvas.
+  instanceLabels.set(component,await findInstanceLabel(component));
+}
+
+async function findInstanceLabel(instance) {
+  const labels=[];
+  const stack=Array.from(instance.children||[]).map((node,index)=>({node,path:[index]}));
+  let visited=0;
+  while(stack.length) {
+    const {node,path}=stack.pop();
+    if(node.visible===false)continue;
+    if(node.type==='TEXT'&&(isLabel(node.name)||isLabel(node.characters))) {
+      labels.push(['Label#layer:'+path.join('.'),{type:'TEXT',defaultValue:node.characters}]);
+      if(labels.length>1)return undefined;
     }
-    Array.from(node.children || []).forEach((child, index) => visit(child, [...path, index]));
+    Array.from(node.children||[]).forEach((child,index)=>stack.push({node:child,path:[...path,index]}));
+    if(++visited%100===0)await yieldToEditor();
   }
-  Array.from(instance.children || []).forEach((child, index) => visit(child, [index]));
-  return labels.length === 1 ? labels[0] : undefined;
+  return labels.length===1?labels[0]:undefined;
 }
 
 function isLabel(name) {
@@ -2092,7 +2134,7 @@ function describeItem(item, suggest = false, showAllFields = false) {
     readOnly: isReadOnly(item.variants[item.variant].name), requestedReadOnly: item.readOnly, optionExample: item.optionExample,
     missing: [!label && 'подпись', item.placeholder && !placeholder && 'плейсхолдер',
       item.value && !value && 'моковое значение'].filter(Boolean),
-    variant: item.variant, variants: item.variants.map(component => component.name),
+    variant: item.variant, variants: variantMetadata(item.variants).names,
     fields: fields.filter(([key, property]) => property.type !== 'TEXT' ||
       showAllFields || !item.fillKeys || item.fillKeys.includes(key)).map(([key, property]) => ({
       key, type: property.type,
@@ -2133,13 +2175,13 @@ async function configureItem({ index, variant, values, error, live }, confirm, r
     prepared.index++;
     if (prepared.index === prepared.items.length) {
       prepared.stage = 'ready';
-      send('readyToApply', { items: prepared.items.map(item => describeItem(item)) });
+      send('readyToApply', { items: prepared.items.map(describeSummary) });
     } else {
       await openCurrentComponent();
     }
     return;
   }
-  if (render) publishPreview(live ? 'itemPreview' : 'itemConfigured', item, { index });
+  if (render) await publishPreview(live ? 'itemPreview' : 'itemConfigured', item, { index, requestPreview:true });
 }
 
 function readLightboxes() {
@@ -2343,59 +2385,56 @@ async function setInstanceValues(instance, values, name, progress = () => {}) {
 let previewSequence = 0;
 let activePreview;
 
-function publishPreview(type, item, message, suggest = false) {
+async function publishPreview(type, item, message, suggest = false) {
+  await ensureComponentLabel(item.variants[item.variant]);
   activePreview?.cancel();
-  activePreview = undefined;
-  const component = item.variants[item.variant];
-  let instance;
-  let description;
-  try {
-    instance = component.createInstance();
-    const frame = prepared?.frameId ? pixso.getNodeById(prepared.frameId) : null;
-    instance.x = frame ? frame.x + frame.width + 48 : pixso.viewport.center.x;
-    instance.y = frame ? frame.y : pixso.viewport.center.y;
-    instanceLabels.set(component, findInstanceLabel(instance));
-    description = describeItem(item, suggest);
-  } catch (error) {
-    if (instance && !instance.removed) instance.remove();
-    description = { ...describeItem(item, suggest), previewError: error.message || String(error) };
-    send(type, { ...message, item: description });
-    return description;
-  }
-  const previewId = ++previewSequence;
-  let cancelled = false;
-  let started = false;
-  activePreview = { previewId, start() {
-    if (started || cancelled) return;
-    started = true;
-    renderPreview();
-  }, cancel() {
-    cancelled = true;
-    if (!instance.removed) instance.remove();
-  } };
-  send(type, { ...message, item: { ...description, previewId } });
+  activePreview=undefined;
+  const component=item.variants[item.variant];
+  let description=describeItem(item,suggest);
+  const previewId=++previewSequence;
+  let instance, cancelled=false, started=false;
+  activePreview={previewId,start(){
+    if(started||cancelled)return;
+    started=true;
+    return renderPreview();
+  },cancel(){
+    cancelled=true;
+    if(instance&&!instance.removed)instance.remove();
+  }};
+  send(type,{...message,item:{...description,previewId,previewDeferred:!message.requestPreview}});
   return description;
 
   async function renderPreview() {
     let result;
     try {
-      const values = Object.fromEntries(description.fields.filter(field => field.value != null)
-        .map(field => [field.key, field.value]));
-      await setInstanceValues(instance, values, item.name, stage => {
-        if (!cancelled) send('previewProgress', { previewId, stage });
-      });
-      if (cancelled) return;
-      if (typeof instance.exportAsync !== 'function') throw new Error('Pixso не поддерживает экспорт экземпляра через exportAsync.');
-      send('previewProgress', { previewId, stage: 'Экспортирую изображение в Pixso' });
-      const png = await instance.exportAsync({ format: 'PNG' });
-      result = { png: Array.from(png) };
-    } catch (error) {
-      result = { previewError: error.message || String(error) };
-    } finally {
-      if (!instance.removed) instance.remove();
-      if (activePreview?.previewId === previewId) activePreview = undefined;
+      send('previewProgress',{previewId,stage:'Создаю экземпляр в Pixso'});
+      await yieldToEditor();
+      if(cancelled)return;
+      instance=component.createInstance();
+      const frame=prepared?.frameId?pixso.getNodeById(prepared.frameId):null;
+      instance.x=frame?frame.x+frame.width+48:pixso.viewport.center.x;
+      instance.y=frame?frame.y:pixso.viewport.center.y;
+      if(!instanceLabels.has(component)&&!editableProperties(component).some(([key,prop])=>prop.type==='TEXT'&&isLabel(key))) {
+        instanceLabels.set(component,await findInstanceLabel(instance));
+        if(cancelled)return;
+        description=describeItem(item,suggest);
+        send('itemConfigured',{index:message.index,item:{...description,previewId}});
+      }
+      const values=Object.fromEntries(description.fields.filter(field=>field.value!=null).map(field=>[field.key,field.value]));
+      await setInstanceValues(instance,values,item.name,stage=>{if(!cancelled)send('previewProgress',{previewId,stage});});
+      if(cancelled)return;
+      if(typeof instance.exportAsync!=='function')throw new Error('Pixso не поддерживает экспорт превью.');
+      send('previewProgress',{previewId,stage:'Экспортирую превью до 960 px'});
+      await yieldToEditor();
+      if(cancelled)return;
+      const png=await instance.exportAsync(previewExportSettings(instance));
+      result={png:Array.from(png)};
+    } catch(error) { result={previewError:error.message||String(error)}; }
+    finally {
+      if(instance&&!instance.removed)instance.remove();
+      if(activePreview?.previewId===previewId)activePreview=undefined;
     }
-    if (!cancelled) send('previewRendered', { item: { name: description.name, ...result, previewId } });
+    if(!cancelled)send('previewRendered',{item:{name:description.name,...result,previewId}});
   }
 }
 
@@ -2468,7 +2507,7 @@ function removePlannedItem(uid) {
   const change = 'Удалён: ' + item.text + ' · ' + item.name;
   conversation.push({ role:'user', text:'Убрать компонент «' + item.text + '» из набора (uid=' + uid + ').' });
   conversation.push({ role:'assistant', text:change });
-  send('proposal', { target:pixso.getNodeById(prepared.bodyId)?.name, items:prepared.items.map(describe => describeItem(describe)), changes:[change], revisionPending:false });
+  send('proposal', { target:pixso.getNodeById(prepared.bodyId)?.name, items:prepared.items.map(describeSummary), changes:[change], revisionPending:false });
 }
 
 async function handleCommand(message) {
@@ -2609,7 +2648,7 @@ function nodeBinding(node) { return node ? { id: node.id, key: node.key, name: n
 function savedItem(item) {
   const result = {};
   for (const key of ['id','uid','name','text','placeholder','value','readOnly','optionExample','error','variant','values','texts','fillKeys','confirmed']) if (item[key] !== undefined) result[key] = item[key];
-  result.variants = item.variants.map(nodeBinding);
+  result.variants = variantMetadata(item.variants).bindings;
   return result;
 }
 function sessionState() {
@@ -2617,10 +2656,17 @@ function sessionState() {
   if (prepared) {
     plan = {};
     for (const key of ['frameId','bodyId','catalog','task','standard','stage','index','revisionPending']) if (prepared[key] !== undefined) plan[key] = prepared[key];
-    if (prepared.items) plan.items = prepared.items.map(savedItem);
+    if (prepared.items) {
+      const groups=new Map();plan.variantGroups=[];
+      plan.items=prepared.items.map(item=>{
+        let group=groups.get(item.variants);
+        if(group===undefined){group=plan.variantGroups.length;groups.set(item.variants,group);plan.variantGroups.push(variantMetadata(item.variants).bindings);}
+        const result=savedItem(item);delete result.variants;result.variantGroup=group;return result;
+      });
+    }
   }
   return { prepared: plan, conversation, itemSequence, flow, approvedSource, flowApproved,
-    activeFormId, activeLibraryAssets:plan?.catalog || activeLibraryAssets, activeLightboxComponent: nodeBinding(activeLightboxComponent) };
+    activeFormId, activeLibraryAssets:plan?.catalog ? undefined : libraryCatalog(activeLibraryAssets), activeLightboxComponent: nodeBinding(activeLightboxComponent) };
 }
 function cleanSessionUI(value) {
   const result = {};
@@ -2689,11 +2735,24 @@ async function restoreSession(id) {
       if (bodyId && !isFormBody(frame,pixso.getNodeById(bodyId))) throw new Error('Область компонентов изменилась или удалена.');
     }
     if (plan?.items) {
-      const items=[];
+      const items=[];const restoredGroups=new Map();const restoredBindings=new Map();
       for (const item of plan.items) {
-        const variants=[];
-        for(const binding of item.variants) variants.push(await resolveComponent(binding));
+        const group=item.variantGroup;
+        let variants=group!==undefined?restoredGroups.get(group):undefined;
+        if(!variants) {
+          variants=[];
+          const bindings=group!==undefined?plan.variantGroups?.[group]:item.variants;
+          if(!Array.isArray(bindings))throw new Error('В истории отсутствуют варианты компонента.');
+          for(const binding of bindings) {
+            const key=binding.id||binding.key;
+            let component=restoredBindings.get(key);
+            if(!component){component=await resolveComponent(binding);restoredBindings.set(key,component);}
+            variants.push(component);
+          }
+          if(group!==undefined)restoredGroups.set(group,variants);
+        }
         items.push({...item,variants});
+        await yieldToEditor();
       }
       plan={...plan,items};
     }
@@ -2703,7 +2762,7 @@ async function restoreSession(id) {
   sessionId=id; sessionCreatedAt=entry.createdAt; sessionUI=cleanSessionUI(snapshot.ui); sessionReadOnly=Boolean(warning);
   prepared = warning ? null : plan; conversation=state.conversation || []; itemSequence=state.itemSequence || 0;
   flow=state.flow; pendingFlow=null; approvedSource=state.approvedSource; flowApproved=state.flowApproved===true;
-  activeFormId=state.activeFormId; activeLibraryAssets=state.activeLibraryAssets;
+  activeFormId=state.activeFormId; activeLibraryAssets=state.activeLibraryAssets || plan?.catalog;
   activeLightboxComponent=state.activeLightboxComponent?.id ? pixso.getNodeById(state.activeLightboxComponent.id) : undefined;
   if (!warning && prepared?.stage==='copy' && sessionUI.draft?.index===prepared.index) {
     try { await configureItem(sessionUI.draft,false,false); } catch { warning='Черновик свойств не удалось восстановить. Проверьте настройки компонента.'; }
@@ -2716,7 +2775,7 @@ async function restoreSession(id) {
   send('sessionRestored', { sessionId, ui:sessionUI, readOnly:sessionReadOnly, warning,
     stage: plan?.stage || (approvedSource?'done':'list'), hasSource:Boolean(approvedSource), formPlaced:Boolean(activeFormId),
     layoutLocked:Boolean(approvedSource?.signature), flowApproved, flow, revisionPending:plan?.revisionPending===true,
-    items: !sessionReadOnly ? prepared?.items?.map(item=>describeItem(item)) || [] : (plan?.items || []).map(({name,text})=>({name,text})),
+    items: !sessionReadOnly ? prepared?.items?.map((item,index)=>prepared.stage==='copy'&&index===prepared.index?describeItem(item):describeSummary(item)) || [] : (plan?.items || []).map(({name,text})=>({name,text})),
     labels:activeFormId && pixso.getNodeById(activeFormId) ? Object.fromEntries(confirmedFlowFields(pixso.getNodeById(activeFormId)).map(field=>[field.field,field.label])) : {},
     index:plan?.index || 0 });
 }
@@ -2744,8 +2803,13 @@ async function handleMessage(message) {
   if (message.type==='placeLightbox' && activeFormId && sessionId) {
     try { persistSession(); newSession(); } catch(error) { send('historyError',{message:error.message});return; }
   }
+  const editorStartedAt=Date.now();
   await handleCommand(message);
+  const editorPreparedAt=Date.now();
   if (!['renderPreview','cancelPreview','previewItem','previewFlowState'].includes(message.type)) {
     try { persistSession(); } catch(error) { send('historyError',{message:'Не удалось сохранить диалог: '+error.message}); }
+  }
+  if(['dialog','prepare','review','reviewDialog','openProperties','previewItem','chooseVariant','previewFlowState'].includes(message.type)) {
+    send('editorMetrics',{operation:message.type,prepareMs:editorPreparedAt-editorStartedAt,saveMs:Date.now()-editorPreparedAt});
   }
 }

@@ -58,7 +58,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.7</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.8</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -76,6 +76,7 @@
 
 </section>
 
+<p id="editorMetrics" class="hint" role="status" hidden></p>
 <p id="modelMetrics" class="hint" role="status" hidden></p>
 <p id="catalogInfo" class="hint" hidden></p>
 <p id="status" role="status" aria-live="polite">Интерфейс загружается…</p>
@@ -693,6 +694,10 @@ function renderItem(index, item) {
       note.textContent = result.pending ? 'Готовлю превью…' : 'Превью недоступно' + (result.previewError ? ' — ' + result.previewError : '');
       preview.appendChild(note);
       if (result.pending) {
+        if(result.previewDeferred) {
+          note.textContent='Превью загружается по кнопке «Обновить превью», чтобы не нагружать Pixso.';
+          return;
+        }
         previewStage = 'Создан экземпляр, ожидаю подготовку';
         post('renderPreview', { previewId: result.previewId });
         imageTimer = setTimeout(() => {
@@ -765,9 +770,7 @@ function renderItem(index, item) {
     if (event.target === variant) return;
     clearTimeout(previewTimer);
     scheduleSessionSave();
-    previewTimer = setTimeout(() => {
-      if (!busy && card.isConnected) post('previewItem', { ...readDraft(), live: true });
-    }, 400);
+    refresh.textContent='Обновить превью · есть правки';
   });
   variant.onchange = () => {
     clearTimeout(previewTimer);
@@ -803,6 +806,10 @@ window.addEventListener('message', async event => {
   if (typeof message.revisionPending === 'boolean') revisionPending = message.revisionPending;
   if (message.catalogInfo) { $('catalogInfo').textContent = message.catalogInfo; $('catalogInfo').hidden = false; }
   switch (message.type) {
+    case 'editorMetrics':
+      $('editorMetrics').hidden=false;
+      $('editorMetrics').textContent='Pixso · '+message.operation+' · обработка '+message.prepareMs+' мс · сохранение '+message.saveMs+' мс';
+      return;
     case 'requestProgress':
       status(message.message);
       return;
@@ -985,7 +992,7 @@ window.addEventListener('message', async event => {
   }
   setBusy(false);
   saveSessionUI();
-  if(message.type==='flowProposal' && flowPreviewViews.has(0)) flowPreviewViews.get(0).button.onclick();
+
   } catch (error) {
     clearTimeout(imageTimer);
     if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });

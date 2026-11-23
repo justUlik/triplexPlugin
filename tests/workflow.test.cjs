@@ -4,10 +4,11 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 function backend(extra = {}) {
   const messages = [];
-  const pixso = { showUI() {}, ui: { postMessage: m => messages.push(m) }, ...extra };
-  const ctx = vm.createContext({ pixso, __html__: '', console });
+  const diagnostics = [];
+  const pixso = { showUI() {}, ui: { postMessage: m => (m.type==='editorMetrics'?diagnostics:messages).push(m) }, ...extra };
+  const ctx = vm.createContext({ pixso, __html__: '', console, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync('main.js', 'utf8'), ctx);
-  return { ctx, messages, run: code => vm.runInContext(code, ctx) };
+  return { ctx, messages, diagnostics, run: code => vm.runInContext(code, ctx) };
 }
 test('catalog excludes buttons and retains specialized components beyond four entries', () => {
   const { run } = backend();
@@ -176,7 +177,7 @@ function revisionFixture() {
   const body={id:'body',name:'BodyPage',type:'FRAME',parent:frame,layoutMode:'VERTICAL',appendChild:n=>inserted.push(n)};
   const components={};
   const names=['BodyPage','Island','MaskedField','SuggestField','AmountField','TextField'];
-  for(const [i,name] of names.entries()) components[String(i+1)]={id:'c'+i,type:'COMPONENT',name:'Default',componentPropertyDefinitions:{'Label#1':{type:'TEXT',defaultValue:'Label'}},
+  for(const [i,name] of names.entries()) components[String(i+1)]={id:'c'+i,key:String(i+1),type:'COMPONENT',name:'Default',componentPropertyDefinitions:{'Label#1':{type:'TEXT',defaultValue:'Label'}},
     createInstance(){return {type:'INSTANCE',kind:name,componentProperties:{'Label#1':{type:'TEXT',value:'Label'}},setProperties(v){this.values=v;},setPluginData(){},remove(){this.removed=true;}};}};
   const app=backend({getNodeById:id=>id==='frame'?frame:id==='body'?body:null,currentPage:{id:'page',selection:[]},importComponentByKeyAsync:async key=>{if(!components[key])throw Error('import unavailable');return components[key];}});
   app.ctx.fixtureNames=names;
@@ -700,4 +701,88 @@ test('revision builds the model request before writing the attached history snap
   assert.ok(events.indexOf('dialogRequest')>=0);
   assert.ok(events.indexOf('dialogRequest')<events.indexOf('save'));
   assert.equal(app.run('sessionUI.transcript[0].text'),'Мои правки');
+});
+
+test('opening component settings does not instantiate or export preview until requested',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  let creates=0,exports=0,settings;
+  const component=app.components['3'];
+  const create=component.createInstance;
+  component.createInstance=()=>{creates++;const instance=create();instance.width=2400;instance.height=120;instance.exportAsync=async opts=>{exports++;settings=opts;return new Uint8Array([1]);};return instance;};
+  app.run('prepared.revisionPending=false;prepared.items=[prepared.items[2]]');
+  await app.run('openProperties()');
+  assert.equal(creates,0);assert.equal(exports,0);
+  assert.equal(app.messages.at(-1).item.previewDeferred,true);
+  await app.run('activePreview.start()');
+  assert.equal(creates,1);assert.equal(exports,1);
+  assert.equal(settings.constraint.type,'SCALE');
+  assert.equal(settings.constraint.value,0.4);
+});
+test('list revision can be prepared without reading live property definitions for every field',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  for(const component of Object.values(app.components))Object.defineProperty(component,'componentPropertyDefinitions',{get(){throw Error('Unexpected properties read');}});
+  await app.run(`requestConversation({revision:'Замени MaskedField на TextField'})`);
+  assert.equal(app.messages.at(-1).type,'dialogRequest');
+});
+test('variant metadata is reused instead of re-reading every live variant for each save',()=>{
+  const {ctx,run}=backend();let reads=0;
+  ctx.variants=Array.from({length:300},(_,i)=>({id:String(i),key:'key'+i,get name(){reads++;return 'Variant '+i;}}));
+  run('variantMetadata(variants)');const first=reads;
+  for(let i=0;i<10;i++)run('variantMetadata(variants)');
+  assert.equal(reads,first);
+  assert.equal(run('variantMetadata(variants).names.length'),300);
+});
+test('history stores each shared variant group once and restores it once',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run('sessionUI={task:"Несколько полей"};persistSession()');
+  const state=app.run('sessionState()');
+  assert.equal(state.prepared.items.filter(i=>i.id===3).length,3);
+  assert.equal(state.prepared.variantGroups.length,5);
+  assert.equal(state.prepared.items.every(item=>item.variants===undefined),true);
+  assert.equal(state.activeLibraryAssets,undefined);
+  const second=historyFixture(app.storage);let imports=0;
+  const importByKey=second.ctx.pixso.importComponentByKeyAsync;
+  second.ctx.pixso.getNodeById=(id)=>{if(id==='frame'||id==='body')return app.ctx.pixso.getNodeById(id);return null;};
+  second.ctx.pixso.importComponentByKeyAsync=async key=>{imports++;return importByKey(key);};
+  second.ctx.savedId=app.run('sessionId');await second.run('restoreSession(savedId)');
+  assert.equal(imports,5);
+  assert.equal(second.run('prepared.items[2].variants===prepared.items[5].variants'),true);
+});
+test('large nested label discovery yields to editor and preserves its path without an instance',async()=>{
+  const {ctx,run}=backend();let yields=0;
+  ctx.setTimeout=callback=>{yields++;callback();return 0;};
+  ctx.component={componentPropertyDefinitions:{},children:Array.from({length:250},()=>({type:'RECTANGLE',children:[]}))};
+  ctx.component.children.push({type:'TEXT',name:'Label',characters:'Label'});
+  await run('ensureComponentLabel(component)');
+  assert.ok(yields>=2);
+  assert.equal(run('editableProperties(component)[0][0]'),'Label#layer:250');
+  const old=yields;await run('ensureComponentLabel(component)');assert.equal(yields,old);
+});
+test('preview export stays bounded and never upscales small components',()=>{
+  const {run}=backend();
+  assert.equal(run('previewExportSettings({width:5000,height:2500}).constraint.value'),0.192);
+  assert.equal(run('previewExportSettings({width:120,height:40}).constraint.value'),1);
+});
+
+test('older saved histories with inline variants still restore',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run(`sessionUI={task:'Старый формат'};persistSession();`);
+  app.run(`const legacy=sessionState();legacy.prepared.items=legacy.prepared.items.map(item=>({...item,variants:legacy.prepared.variantGroups[item.variantGroup]}));delete legacy.prepared.variantGroups;legacy.prepared.items.forEach(item=>delete item.variantGroup);
+    const index=readHistory();const entry=index.sessions[0];const content=JSON.stringify({version:1,state:legacy,ui:sessionUI});entry.chunks=1;pixso.root.setPluginData(historyKey+':'+sessionId+':'+entry.generation+':0',content);pixso.root.setPluginData(historyKey,JSON.stringify(index));`);
+  const restored=historyFixture(app.storage);restored.ctx.restoreId=app.run('sessionId');await restored.run('restoreSession(restoreId)');
+  assert.equal(restored.run('prepared.items.length'),7);
+  assert.equal(restored.run('sessionReadOnly'),false);
+});
+test('replacement reuses an already imported type from the current plan',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  app.ctx.pixso.importComponentByKeyAsync=async()=>{throw Error('Unexpected reimport');};
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,id:4},{uid:4}]}))`);
+  assert.equal(app.run('prepared.items[0].name'),'SuggestField');
+});
+test('saved catalog omits irrelevant asset payloads while preserving import bindings',()=>{
+  const {ctx,run}=backend();
+  ctx.assets=[{key:'set',type:'COMPONENT_SET',name:'NumberField',thumbnail:'x'.repeat(10000),variants:[{id:'1',key:'one',name:'Default',thumbnail:'y'.repeat(10000)}]}];
+  assert.equal(run('libraryCatalog(assets)===libraryCatalog(assets)'),true);
+  assert.equal(run('libraryCatalog(assets)[0].variants[0].key'),'one');
+  assert.ok(run('JSON.stringify(libraryCatalog(assets)).length')<1000);
 });
