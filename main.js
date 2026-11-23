@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 21.11.6' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.1' });
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {
@@ -2292,7 +2292,7 @@ pixso.ui.onmessage = message => {
   messageQueue = messageQueue.then(() => handleMessage(message));
 };
 
-async function handleMessage(message) {
+async function handleCommand(message) {
   try {
     switch (message.type) {
       case 'init':
@@ -2407,3 +2407,147 @@ async function handleMessage(message) {
     send('error', { message: stage ? stage + ' — ' + detail : detail, revisionPending: Boolean(prepared?.revisionPending) });
   }
 };
+
+const historyKey = 'triplex-dialog-history-v1';
+let sessionId;
+let sessionUI = {};
+let sessionReadOnly = false;
+let sessionCreatedAt;
+function readHistory() {
+  const value = JSON.parse(pixso.root.getPluginData(historyKey) || '{"version":1,"sessions":[]}');
+  if (value.version !== 1 || !Array.isArray(value.sessions)) throw new Error('Не удалось прочитать историю диалогов этого файла.');
+  return value;
+}
+function nodeBinding(node) { return node ? { id: node.id, key: node.key, name: node.name } : null; }
+function savedItem(item) {
+  const result = {};
+  for (const key of ['id','uid','name','text','placeholder','value','readOnly','optionExample','error','variant','values','texts','fillKeys','confirmed']) if (item[key] !== undefined) result[key] = item[key];
+  result.variants = item.variants.map(nodeBinding);
+  return result;
+}
+function sessionState() {
+  let plan = null;
+  if (prepared) {
+    plan = {};
+    for (const key of ['frameId','bodyId','catalog','task','standard','stage','index','revisionPending']) if (prepared[key] !== undefined) plan[key] = prepared[key];
+    if (prepared.items) plan.items = prepared.items.map(savedItem);
+  }
+  return { prepared: plan, conversation, itemSequence, flow, approvedSource, flowApproved,
+    activeFormId, activeLibraryAssets, activeLightboxComponent: nodeBinding(activeLightboxComponent) };
+}
+function cleanSessionUI(value) {
+  const result = {};
+  for (const key of ['task','standard','feedback','revision','size']) if (typeof value?.[key] === 'string') result[key] = value[key];
+  for (const key of ['hasFlowDraft','hasFlowResponse']) result[key] = value?.[key] === true;
+  result.flowDecisions = Array.isArray(value?.flowDecisions) ? value.flowDecisions.filter(pair => Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'boolean') : [];
+  if (value?.draft && Number.isInteger(value.draft.index) && Number.isInteger(value.draft.variant)) {
+    const values=Object.fromEntries(Object.entries(value.draft.values||{}).filter(([,v])=>typeof v==='string'||typeof v==='boolean'));
+    result.draft={index:value.draft.index,variant:value.draft.variant,values};
+  }
+  result.transcript = Array.isArray(value?.transcript) ? value.transcript.filter(m => ['componentChat','flowChat'].includes(m?.chat) && typeof m.author === 'string' && typeof m.text === 'string').map(({chat,author,text})=>({chat,author,text})) : [];
+  return result;
+}
+function persistSession() {
+  if (!pixso.root?.setPluginData || sessionReadOnly) return;
+  if (!sessionId && !activeFormId && !sessionUI.task && !sessionUI.transcript?.length) return;
+  if (!sessionId) { sessionId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2); sessionCreatedAt = Date.now(); }
+  const history = readHistory();
+  const prior = history.sessions.find(s => s.id === sessionId);
+  const state = sessionState();
+  const generation = Date.now().toString(36) + Math.random().toString(36).slice(2);
+  const serialized = JSON.stringify({ version:1, ui:sessionUI, state });
+  const chunks = Math.ceil(serialized.length / 12000);
+  for (let i=0;i<chunks;i++) pixso.root.setPluginData(`${historyKey}:${sessionId}:${generation}:${i}`, serialized.slice(i*12000,(i+1)*12000));
+  const entry = { id:sessionId, generation, chunks, createdAt:prior?.createdAt || sessionCreatedAt,
+    updatedAt:Date.now(), title:(sessionUI.task || prepared?.task || 'Новый диалог').slice(0,100),
+    frameId:activeFormId, stage:prepared?.stage || (approvedSource ? 'done' : 'setup') };
+  history.sessions = [entry, ...history.sessions.filter(s=>s.id!==sessionId)];
+  // Commit the index last; interrupted writes leave the previous complete snapshot readable.
+  pixso.root.setPluginData(historyKey, JSON.stringify(history));
+  if (prior) for(let i=0;i<prior.chunks;i++) { try { pixso.root.setPluginData(`${historyKey}:${sessionId}:${prior.generation}:${i}`, ''); } catch {} }
+  send('historySaved', { sessionId });
+}
+function newSession() {
+  activePreview?.cancel(); activePreview = undefined;
+  sessionId = undefined; sessionUI = {}; sessionReadOnly = false; sessionCreatedAt = undefined;
+  prepared = null; conversation = []; flow = null; pendingFlow = null; approvedSource = null;
+  flowApproved = false; activeFormId = undefined; activeLibraryAssets = undefined; activeLightboxComponent = undefined;
+}
+async function restoreSession(id) {
+  const entry = readHistory().sessions.find(s=>s.id===id);
+  if (!entry) throw new Error('Диалог не найден в этом файле.');
+  let serialized = '';
+  for(let i=0;i<entry.chunks;i++) {
+    const chunk = pixso.root.getPluginData(`${historyKey}:${id}:${entry.generation}:${i}`);
+    if (!chunk) throw new Error('Сохранённый диалог повреждён. Текущий диалог оставлен открытым.');
+    serialized += chunk;
+  }
+  const snapshot = JSON.parse(serialized);
+  if (snapshot.version!==1 || !snapshot.state) throw new Error('Неподдерживаемый формат диалога.');
+  const state = snapshot.state;
+  let plan = state.prepared;
+  let warning = '';
+  try {
+    if (state.activeFormId) {
+      const frame = pixso.getNodeById(state.activeFormId);
+      if (!frame || frame.removed) throw new Error('Исходный фрейм удалён.');
+      if (frame.parent?.type === 'PAGE' && frame.parent.id !== pixso.currentPage.id) pixso.currentPage = frame.parent;
+      getActiveForm(state.activeFormId);
+      const bodyId = plan?.bodyId || state.approvedSource?.bodyId;
+      if (bodyId && !isFormBody(frame,pixso.getNodeById(bodyId))) throw new Error('Область компонентов изменилась или удалена.');
+    }
+    if (plan?.items) {
+      const items=[];
+      for (const item of plan.items) {
+        const variants=[];
+        for(const binding of item.variants) variants.push(await resolveComponent(binding));
+        items.push({...item,variants});
+      }
+      plan={...plan,items};
+    }
+  } catch(error) { warning = error.message + ' История доступна для чтения; восстановите фрейм/библиотеку и откройте диалог заново.'; }
+  activePreview?.cancel(); activePreview = undefined;
+  sessionId=id; sessionCreatedAt=entry.createdAt; sessionUI=cleanSessionUI(snapshot.ui); sessionReadOnly=Boolean(warning);
+  prepared = warning ? null : plan; conversation=state.conversation || []; itemSequence=state.itemSequence || 0;
+  flow=state.flow; pendingFlow=null; approvedSource=state.approvedSource; flowApproved=state.flowApproved===true;
+  activeFormId=state.activeFormId; activeLibraryAssets=state.activeLibraryAssets;
+  activeLightboxComponent=state.activeLightboxComponent?.id ? pixso.getNodeById(state.activeLightboxComponent.id) : undefined;
+  if (!warning && prepared?.stage==='copy' && sessionUI.draft?.index===prepared.index) {
+    try { await configureItem(sessionUI.draft,false,false); } catch { warning='Черновик свойств не удалось восстановить. Проверьте настройки компонента.'; }
+  }
+  if (!warning && approvedSource?.signature && layoutSignature(getActiveForm(activeFormId))!==approvedSource.signature) {
+    delete approvedSource.signature; flowApproved=false;
+    getActiveForm(activeFormId).locked=false;
+    warning='Макет изменился после сохранения. Перед созданием состояний закрепите верстку повторно.';
+  }
+  send('sessionRestored', { sessionId, ui:sessionUI, readOnly:sessionReadOnly, warning,
+    stage: plan?.stage || (approvedSource?'done':'list'), hasSource:Boolean(approvedSource), formPlaced:Boolean(activeFormId),
+    layoutLocked:Boolean(approvedSource?.signature), flowApproved, flow, revisionPending:plan?.revisionPending===true,
+    items: !sessionReadOnly ? prepared?.items?.map(item=>describeItem(item)) || [] : (plan?.items || []).map(({name,text})=>({name,text})),
+    index:plan?.index || 0 });
+}
+
+async function handleMessage(message) {
+  if (message.type === 'init') {
+    await handleCommand(message);
+    try { send('historyList', { sessions:readHistory().sessions }); } catch(error) { send('historyError',{message:error.message}); }
+    return;
+  }
+  if (['saveSessionUI','listHistory','openSession','newSession'].includes(message.type)) {
+    try {
+      if (message.type === 'saveSessionUI') { if(!sessionReadOnly) { sessionUI=cleanSessionUI(message.ui); persistSession(); } }
+      if (message.type === 'listHistory') send('historyList',{sessions:readHistory().sessions});
+      if (message.type === 'openSession') { persistSession(); await restoreSession(message.id); }
+      if (message.type === 'newSession') { persistSession(); newSession(); send('sessionRestored',{ui:{},items:[],stage:'list'}); send('historyList',{sessions:readHistory().sessions}); }
+    } catch(error) { send('historyError',{message:error.message}); }
+    return;
+  }
+  if (sessionReadOnly) { send('error',{message:'Этот диалог открыт только для чтения. Восстановите исходный фрейм или начните новый диалог.'}); return; }
+  if (message.type==='placeLightbox' && activeFormId && sessionId) {
+    try { persistSession(); newSession(); } catch(error) { send('historyError',{message:error.message});return; }
+  }
+  await handleCommand(message);
+  if (!['renderPreview','cancelPreview','previewItem'].includes(message.type)) {
+    try { persistSession(); } catch(error) { send('historyError',{message:'Не удалось сохранить диалог: '+error.message}); }
+  }
+}

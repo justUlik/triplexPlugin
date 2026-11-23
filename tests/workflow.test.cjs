@@ -362,3 +362,93 @@ test('unlocking and relocking layout resets the first-proposal step',async()=>{
   assert.equal(get('flowFeedback').hidden,true);
   assert.equal(get('flowSend').textContent,'Предложить состояния и ошибки');
 });
+
+function historyFixture(storage=new Map()) {
+  const app=revisionFixture();
+  app.ctx.pixso.root={getPluginData:key=>storage.get(key)||'',setPluginData:(key,value)=>storage.set(key,value)};
+  const getNode=app.ctx.pixso.getNodeById;
+  app.ctx.pixso.getNodeById=id=>getNode(id)||Object.values(app.components).find(component=>component.id===id)||null;
+  // Component references can be reimported after a full runtime restart.
+  return {...app,storage};
+}
+test('file history survives runtime restart and restores actual types, conversation and step',async()=>{
+  const first=historyFixture();await seedB2B(first);
+  await first.run(`reviewConversation(JSON.stringify({action:'list',reply:'Готово',items:[{uid:3,id:6},{uid:7,id:4}]}))`);
+  first.run(`prepared.stage='ready';prepared.items.forEach(item=>item.confirmed=true);conversation.push({role:'user',text:'Счёт из справочника'});sessionUI=cleanSessionUI({task:'Перевод B2B',token:'SECRET',transcript:[{chat:'componentChat',author:'Вы',text:'Мой сценарий'}]});persistSession()`);
+  const id=first.run('sessionId');
+  assert.ok(!Array.from(first.storage.values()).join('').includes('SECRET'));
+  const second=historyFixture(first.storage);
+  second.ctx.restoreId=id;
+  await second.run('restoreSession(restoreId)');
+  assert.equal(second.run('prepared.stage'),'ready');
+  assert.deepEqual(Array.from(second.run('prepared.items.map(i=>i.name)')),['TextField','SuggestField']);
+  assert.equal(second.run('prepared.items.every(i=>i.confirmed)'),true);
+  assert.equal(second.run('conversation.at(-1).text'),'Счёт из справочника');
+  assert.equal(second.messages.at(-1).ui.transcript[0].text,'Мой сценарий');
+  assert.equal(second.messages.at(-1).readOnly,false);
+});
+test('multiple dialogues remain independently accessible in the same file',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run(`sessionUI={task:'Первый'};persistSession()`);const firstId=app.run('sessionId');
+  app.run(`newSession();sessionUI={task:'Второй'};persistSession()`);
+  assert.equal(app.run('readHistory().sessions.length'),2);
+  app.ctx.firstId=firstId;await app.run('restoreSession(firstId)');
+  assert.equal(app.run('sessionUI.task'),'Первый');
+  assert.equal(app.run('prepared.items.length'),7);
+  const otherFile=historyFixture();assert.equal(otherFile.run('readHistory().sessions.length'),0);
+});
+test('deleted frames leave a readable history without overwriting saved work',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run(`sessionUI={task:'Не терять'};persistSession()`);
+  const snapshot=app.storage.get('triplex-dialog-history-v1');const id=app.run('sessionId');
+  app.ctx.pixso.getNodeById=()=>null;app.ctx.restoreId=id;
+  await app.run('restoreSession(restoreId)');
+  assert.equal(app.messages.at(-1).readOnly,true);
+  assert.match(app.messages.at(-1).warning,/удалён/);
+  app.run('persistSession()');assert.equal(app.storage.get('triplex-dialog-history-v1'),snapshot);
+  await app.run(`handleMessage({type:'apply'})`);assert.match(app.messages.at(-1).message,/только для чтения/);
+});
+test('history commits index after chunks so a failed save preserves the last snapshot',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run(`sessionUI={task:'Сохранено'};persistSession()`);
+  const prior=app.storage.get('triplex-dialog-history-v1');
+  const write=app.ctx.pixso.root.setPluginData;
+  app.ctx.pixso.root.setPluginData=(key,value)=>{if(key==='triplex-dialog-history-v1')throw Error('disk full');write(key,value);};
+  assert.throws(()=>app.run(`sessionUI.task='Не записано';persistSession()`),/disk full/);
+  assert.equal(app.storage.get('triplex-dialog-history-v1'),prior);
+});
+test('state decisions and unsent message survive history restoration',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run(`prepared=null;approvedSource={frameId:'frame',bodyId:'body'};flow={states:[{name:'Ошибка',condition:'Нет сети',values:{},errors:[{field:'',text:'Повторите'}]}]};sessionUI=cleanSessionUI({task:'Перевод',feedback:'Ещё кейс',hasFlowDraft:true,hasFlowResponse:true,flowDecisions:[['choice',false]]});persistSession()`);
+  const second=historyFixture(app.storage);second.ctx.restoreId=app.run('sessionId');await second.run('restoreSession(restoreId)');
+  assert.equal(second.messages.at(-1).stage,'done');
+  assert.equal(second.messages.at(-1).ui.feedback,'Ещё кейс');
+  assert.equal(second.messages.at(-1).ui.flowDecisions[0][1],false);
+  assert.equal(second.messages.at(-1).flow.states[0].name,'Ошибка');
+});
+test('unfinished component values are restored without losing the current editing step',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run(`prepared.stage='copy';prepared.index=2;sessionUI=cleanSessionUI({task:'Черновик',draft:{index:2,variant:0,values:{'Label#1':'ИНН организации'}}});persistSession()`);
+  const second=historyFixture(app.storage);second.ctx.restoreId=app.run('sessionId');await second.run('restoreSession(restoreId)');
+  assert.equal(second.run('prepared.index'),2);
+  assert.equal(second.run('prepared.stage'),'copy');
+  assert.equal(second.run(`prepared.items[2].values['Label#1']`),'ИНН организации');
+});
+test('history UI restores messages, unsent inputs and ready-to-apply step',async()=>{
+  const {get,receive,ctx}=ui();
+  await receive({type:'sessionRestored',sessionId:'saved',stage:'ready',formPlaced:true,items:[{name:'TextField',text:'ИНН'}],ui:{task:'Перевод',revision:'Добавить поле',transcript:[{chat:'componentChat',author:'Вы',text:'Выбрать ИНН'},{chat:'componentChat',author:'GigaCode',text:'Предлагаю TextField'}]}});
+  assert.equal(get('task').value,'Перевод');
+  assert.equal(get('revision').value,'Добавить поле');
+  assert.equal(get('componentChat').children.length,2);
+  assert.equal(get('items').children.length,1);
+  assert.equal(get('apply').hidden,false);
+  assert.equal(vm.runInContext('transcript.length',ctx),2);
+});
+test('history read-only mode permits browsing and new chat but prevents insertion',async()=>{
+  const {get,receive}=ui();
+  await receive({type:'sessionRestored',sessionId:'deleted',stage:'ready',readOnly:true,warning:'Фрейм удалён',formPlaced:true,items:[{name:'TextField',text:'ИНН'}],ui:{}});
+  assert.equal(get('apply').disabled,true);
+  assert.equal(get('place').disabled,true);
+  assert.equal(get('newDialogue').disabled,false);
+  assert.equal(get('items').children.length,1);
+});

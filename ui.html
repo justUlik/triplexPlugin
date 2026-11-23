@@ -33,6 +33,13 @@
 </style>
 </head>
 <body>
+<details id="historyPanel">
+  <summary>История диалогов этого файла</summary>
+  <button id="refreshHistory" type="button">Обновить историю</button>
+  <button id="newDialogue" type="button">Новый диалог</button>
+  <ol id="historyList"></ol>
+</details>
+<p id="saveStatus" class="hint" role="status">Диалоги сохраняются в этом файле</p>
 <label>Размер LightBox
   <select id="lightboxSize">
     <option value="">Выберите размер</option>
@@ -43,7 +50,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 21.11.6</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.1</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -122,6 +129,67 @@ let flowStates = [];
 let flowSelection = [];
 const flowDecisions = new Map();
 
+let transcript = [];
+let replayingHistory = false;
+let historyReadOnly = false;
+let currentSessionId;
+function saveSessionUI() {
+  if (replayingHistory || historyReadOnly) return;
+  post('saveSessionUI', { ui: { task:$('task').value, standard:$('standard').value, feedback:$('feedback').value,
+    revision:$('revision').value, size:selectedSize(), transcript, hasFlowDraft, hasFlowResponse,
+    flowDecisions:[...flowDecisions], draft:stage==='copy' ? readDraft?.() : undefined } });
+}
+function renderHistory(sessions) {
+  $('historyList').replaceChildren();
+  if (!sessions.length) { const p=document.createElement('p');p.textContent='В этом файле пока нет сохранённых диалогов.';$('historyList').appendChild(p); }
+  const names={setup:'Начало',list:'Выбор компонентов',copy:'Настройка компонентов',ready:'Готов к вставке',done:'Макет и состояния'};
+  for(const session of sessions) {
+    const row=document.createElement('li');
+    const button=document.createElement('button');
+    button.textContent=session.title;
+    button.disabled=busy;
+    button.onclick=()=>{ if(busy)return; saveSessionUI();setBusy(true);post('openSession',{id:session.id}); };
+    const note=document.createElement('p');note.className='hint';
+    note.textContent=(names[session.stage]||session.stage)+' · '+new Date(session.updatedAt).toLocaleString('ru-RU');
+    row.append(button,note);$('historyList').appendChild(row);
+  }
+}
+$('refreshHistory').onclick=()=>{ if(!busy){saveSessionUI();post('listHistory');} };
+$('newDialogue').onclick=()=>{ if(!busy){saveSessionUI();setBusy(true);post('newSession');} };
+for(const id of ['task','standard','feedback','revision','lightboxSize']) $(id).addEventListener('input',saveSessionUI);
+function restoreHistoryUI(message) {
+  replayingHistory=true;
+  try {
+    resetPlan();clearFlow();
+    $('componentChat').replaceChildren();$('flowChat').replaceChildren();
+    transcript=[];
+    const saved=message.ui||{};
+    for(const id of ['task','standard','feedback','revision']) $(id).value=saved[id]||'';
+    $('lightboxSize').value=saved.size||'';
+    currentSessionId=message.sessionId;
+    historyReadOnly=message.readOnly===true;
+    formPlaced=message.formPlaced===true;hasSource=message.hasSource===true;layoutLocked=message.layoutLocked===true;
+    flowApproved=message.flowApproved===true;revisionPending=message.revisionPending===true;
+    stage=message.stage||'list';componentCount=message.items?.length||0;
+    for(const record of saved.transcript||[]) {addMessage(record.chat,record.author,record.text);transcript.push(record);}
+    for(const pair of saved.flowDecisions||[]) flowDecisions.set(pair[0],pair[1]);
+    if(message.flow?.states) renderFlowChoices(message.flow.states);
+    hasFlowResponse=saved.hasFlowResponse===true || Boolean(message.flow);
+    hasFlowDraft=saved.hasFlowDraft===true && Boolean(message.flow?.states?.length);
+    $('formSetup').hidden=!formPlaced;
+    $('plan').hidden=!formPlaced && !transcript.length;
+    $('scenario').open=hasFlowResponse;
+    $('planTitle').textContent=stage==='done'?'Компоненты на фрейме':'Текущий набор компонентов';
+    if(!historyReadOnly && stage==='copy' && message.items?.[message.index]) {
+      $('planTitle').textContent='Компонент '+(message.index+1)+' из '+componentCount;
+      $('items').replaceChildren(renderItem(message.index,message.items[message.index]));
+    } else renderProposal(message.items||[]);
+    lastRequest=lastModelRequest=undefined;
+    status(message.warning || (currentSessionId?'Диалог восстановлен. Можно продолжить.':'Новый диалог. Выберите размер LightBox.'),historyReadOnly);
+    $('saveStatus').textContent=currentSessionId?'Сохранённый диалог открыт':'Диалог будет сохраняться в этом файле';
+  } finally {replayingHistory=false;}
+}
+
 function selectedSize() {
   return $('lightboxSize').value;
 }
@@ -167,6 +235,14 @@ function setBusy(value) {
   $('apply').disabled = value || revisionPending;
   $('place').disabled = value || !selectedSize();
   $('prepare').disabled = $('task').disabled = value || !formPlaced;
+  $('newDialogue').disabled = $('refreshHistory').disabled = value;
+  $('historyList').querySelectorAll('button').forEach(button=>{button.disabled=value;});
+  if(historyReadOnly) {
+    for(const id of ['prepare','place','revise','openProperties','apply','lockLayout','unlockLayout','flowSend','approveFlow','createStates','keepCurrent']) $(id).disabled=true;
+    $('items').querySelectorAll('input,select,textarea,button').forEach(control=>{control.disabled=true;});
+    $('flowChoices').querySelectorAll('button').forEach(control=>{control.disabled=true;});
+    for(const id of ['task','standard','revision','feedback']) $(id).disabled=true;
+  }
 }
 
 function resetPlan() {
@@ -209,6 +285,7 @@ function finishPending(text) {
 }
 
 function sendRequest(type, data) {
+  saveSessionUI();
   lastRequest = { type, data };
   lastModelRequest = undefined;
   post(type, data);
@@ -224,7 +301,10 @@ $('lightboxSize').onchange = () => {
 $('place').onclick = () => {
   const size = selectedSize();
   if (busy || !size) return;
+  saveSessionUI();
   resetPlan();
+  transcript=[];
+  formPlaced=false;hasSource=false;layoutLocked=false;
   setBusy(true);
   status('Ставлю LightBox ' + size + ' в Pixso…');
   placementTimer = setTimeout(() => {
@@ -272,6 +352,7 @@ $('revise').onclick = () => {
 
 function addMessage(chat, author, text) {
   if (!text) return;
+  if (!replayingHistory && text !== 'GigaChat работает…') transcript.push({chat,author,text:String(text)});
   const item = document.createElement('li');
   item.className = 'message' + (author === 'Вы' ? ' user' : '');
   const name = document.createElement('strong');
@@ -366,6 +447,7 @@ $('flowSend').onclick = () => {
   addMessage('flowChat', 'Вы', feedback || $('task').value.trim());
   setBusy(true);
   status(hasFlowResponse ? 'GigaCode дополняет состояния и ошибки…' : 'GigaCode предлагает состояния и ошибки…');
+  saveSessionUI();
   post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback, selection: flowSelection });
 };
 
@@ -413,6 +495,7 @@ function renderFlowChoices(states, labels = {}) {
         post('invalidateFlow');
         refresh();
         setBusy(false);
+        saveSessionUI();
       };
       refresh();
       parent.appendChild(button);
@@ -575,6 +658,7 @@ function renderItem(index, item) {
   card.addEventListener('input', event => {
     if (event.target === variant) return;
     clearTimeout(previewTimer);
+    saveSessionUI();
     previewTimer = setTimeout(() => {
       if (!busy && card.isConnected) post('previewItem', { ...readDraft(), live: true });
     }, 400);
@@ -613,6 +697,21 @@ window.addEventListener('message', async event => {
   if (typeof message.revisionPending === 'boolean') revisionPending = message.revisionPending;
   if (message.catalogInfo) { $('catalogInfo').textContent = message.catalogInfo; $('catalogInfo').hidden = false; }
   switch (message.type) {
+    case 'historySaved':
+      currentSessionId=message.sessionId;
+      $('saveStatus').textContent='Все изменения сохранены в этом файле';
+      return;
+    case 'historyList':
+      renderHistory(message.sessions);
+      return;
+    case 'historyError':
+      $('saveStatus').textContent=message.message;
+      setBusy(false);
+      return;
+    case 'sessionRestored':
+      restoreHistoryUI(message);
+      setBusy(false);
+      return;
     case 'flowRequest':
       try {
         post('reviewFlow', { raw: await requestModel(message.prompt) });
@@ -773,6 +872,7 @@ window.addEventListener('message', async event => {
     pendingMessage = null;
   }
   setBusy(false);
+  saveSessionUI();
   } catch (error) {
     clearTimeout(imageTimer);
     if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
@@ -786,6 +886,7 @@ window.addEventListener('message', async event => {
 
 setBusy(false);
 status('');
+post('init');
 </script>
 </body>
 </html>
