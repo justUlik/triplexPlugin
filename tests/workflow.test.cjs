@@ -786,3 +786,61 @@ test('saved catalog omits irrelevant asset payloads while preserving import bind
   assert.equal(run('libraryCatalog(assets)[0].variants[0].key'),'one');
   assert.ok(run('JSON.stringify(libraryCatalog(assets)).length')<1000);
 });
+
+test('mismatched component name and numeric catalog id are rejected before any import',async()=>{
+  const app=revisionFixture();
+  let imports=0;app.ctx.pixso.importComponentByKeyAsync=async()=>{imports++;throw Error('Should not import');};
+  app.run(`prepared.requireCatalogIdentity=true;prepared.catalog=[{key:'tracker',type:'COMPONENT',name:'Status Tracker (R) / Status Tracker Adaptive',knowledgeName:'StatusTracker'},{key:'number',type:'COMPONENT',name:'Number Field (R) / Number Field',knowledgeName:'NumberField'}]`);
+  await assert.rejects(app.run(`review(JSON.stringify({reply:'NumberField (1) — ввод количества',items:[{id:1,component:'NumberField',text:'Количество ЦФА'}]}))`),/Несовпадение типа/);
+  assert.equal(imports,0);
+  assert.equal(app.run('prepared.items'),undefined);
+});
+test('catalog reference uses stable key and verifies semantic type even if order changes',()=>{
+  const {run}=backend();
+  assert.equal(run(`resolveCatalogIdentity({key:'amount',component:'Amount'},[{key:'notification',name:'Notification',knowledgeName:'Notification'},{key:'amount',name:'Amount (R) / Amount',knowledgeName:'Amount'}],true)`),2);
+  assert.throws(()=>run(`resolveCatalogIdentity({id:1,key:'amount',component:'Amount'},[{key:'notification',name:'Notification',knowledgeName:'Notification'},{key:'amount',name:'Amount (R) / Amount',knowledgeName:'Amount'}],true)`),/ID и ключ/);
+});
+test('new model selection requires a verifiable component identity instead of trusting id alone',async()=>{
+  const app=revisionFixture();
+  app.run(`sendPlanRequest()`);
+  const request=app.messages.at(-1).prompt;
+  assert.match(request, /"key":"3"/);
+  assert.equal(app.run('prepared.requireCatalogIdentity'),true);
+  await assert.rejects(app.run(`review(JSON.stringify({items:[{id:3,text:'Количество ЦФА'}]}))`),/Не указан тип/);
+});
+test('identity mismatch requests one correction and a corrected key imports the intended type',async()=>{
+  const app=revisionFixture();
+  app.run('prepared.requireCatalogIdentity=true');
+  await app.run(`handleMessage({type:'review',raw:JSON.stringify({items:[{id:1,component:'TextField',text:'ИНН'}]})})`);
+  assert.equal(app.messages.at(-1).type,'prepared');
+  assert.equal(app.messages.at(-1).repairing,true);
+  await app.run(`handleMessage({type:'review',raw:JSON.stringify({items:[{key:'6',component:'TextField',text:'ИНН'}]})})`);
+  assert.equal(app.run('prepared.items[0].name'),'TextField');
+  assert.equal(app.messages.at(-1).type,'proposal');
+  assert.match(app.messages.at(-1).reply,/Предложено компонентов: 1/);
+});
+test('replacement verifies type/key and leaves old set untouched if inconsistent',async()=>{
+  const app=revisionFixture();await seedB2B(app);app.run('prepared.requireCatalogIdentity=true');
+  const before=app.run('JSON.stringify(prepared.items)');
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил на TextField',items:[{uid:3,id:1,component:'TextField'}]}))`),/Несовпадение типа/);
+  assert.equal(app.run('JSON.stringify(prepared.items)'),before);
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил',items:[{uid:3,key:'6',component:'TextField'},{uid:4}]}))`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(item=>item.name)')),['TextField','SuggestField']);
+});
+test('numeric-only replacement cannot bypass identity validation using configure updates',async()=>{
+  const app=revisionFixture();await seedB2B(app);app.run('prepared.requireCatalogIdentity=true');
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'configure',reply:'Заменил',updates:[{uid:3,id:6}]}))`),/Не указан тип/);
+  assert.equal(app.run('prepared.items[2].name'),'MaskedField');
+});
+test('reported CFA mismatches cannot resolve NumberField, SelectField or Amount to unrelated catalog rows',()=>{
+  const {ctx,run}=backend();
+  const catalog=Array.from({length:90},(_,i)=>({key:'other-'+i,name:'Other '+i,knowledgeName:null}));
+  catalog[86]={key:'tracker',name:'Status Tracker (R) / Status Tracker Adaptive',knowledgeName:'StatusTracker'};
+  catalog[21]={key:'loader',name:'Loaders (R) / Loader Small',knowledgeName:'LoaderSmall'};
+  catalog[56]={key:'notification',name:'Notifications (R) / Notification / System',knowledgeName:'Notification'};
+  ctx.reportedCatalog=catalog;
+  for(const [id,component] of [[87,'NumberField'],[22,'SelectField'],[57,'Amount']]) {
+    ctx.reportedEntry={id,component};
+    assert.throws(()=>run('resolveCatalogIdentity(reportedEntry,reportedCatalog,true)'),/Несовпадение типа/);
+  }
+});

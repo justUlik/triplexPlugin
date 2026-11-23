@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.8' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.9' });
 
 function yieldToEditor() { return new Promise(resolve=>setTimeout(resolve,0)); }
 const variantMetadataCache = new WeakMap();
@@ -1157,7 +1157,7 @@ function variantMetadata(variants) {
   return result;
 }
 function describeSummary(item) {
-  return {uid:item.uid,name:item.name,text:item.text,readOnly:isReadOnly(item.variants[item.variant].name),requestedReadOnly:item.readOnly};
+  return {uid:item.uid,name:item.name,text:item.text,purpose:prepared?.catalog?.[item.id-1]?.use || componentKnowledge({name:item.name})?.use,readOnly:isReadOnly(item.variants[item.variant].name),requestedReadOnly:item.readOnly};
 }
 function previewExportSettings(node) {
   const extent=Math.max(Number(node.width)||1,Number(node.height)||1);
@@ -1255,8 +1255,31 @@ function formCatalog(assets) {
   return [...candidates.values()];
 }
 
+function catalogIdentityError(message) {
+  const error=new Error(message);
+  error.code='MODEL_IDENTITY';
+  return error;
+}
+function resolveCatalogIdentity(entry,catalog,required=false) {
+  const key=entry.key ?? entry.componentKey;
+  const component=entry.component ?? entry.componentName;
+  const id=typeof entry.id==='string'&&/^\d+$/.test(entry.id.trim())?Number(entry.id.trim()):entry.id;
+  const keyIndex=key===undefined?-1:catalog.findIndex(asset=>asset.key===key);
+  if(key!==undefined&&keyIndex<0)throw catalogIdentityError('Ключ компонента не найден в текущем каталоге.');
+  const index=keyIndex>=0?keyIndex:id-1;
+  const asset=catalog[index];
+  if(!Number.isInteger(index)||!asset)throw catalogIdentityError('Компонент не найден в текущем каталоге.');
+  if(keyIndex>=0 && id!==undefined && id!==keyIndex+1)throw catalogIdentityError('ID и ключ указывают на разные компоненты. Скопируй их из одной строки каталога.');
+  if(required && (typeof component!=='string'||!component.trim()))throw catalogIdentityError('Не указан тип выбранного компонента. Вместе с id/key передай component из doc или точное name каталога.');
+  if(component!==undefined && (typeof component!=='string'||![asset.name,asset.knowledgeName].filter(Boolean).includes(component.trim()))) {
+    throw catalogIdentityError('Несовпадение типа: выбран «'+String(component)+'», но ссылка ведёт на «'+asset.name+'». Нельзя вставить другой тип по этому ID.');
+  }
+  return index+1;
+}
+
+
 function modelCatalog(catalog) {
-  return catalog.map((item, index) => ({ id: index + 1, name: item.name, doc: item.knowledgeName }));
+  return catalog.map((item, index) => ({ id: index + 1, key:item.key, name: item.name, doc: item.knowledgeName }));
 }
 
 function catalogInfo(catalog) {
@@ -1267,7 +1290,7 @@ function catalogInfo(catalog) {
 function withTriplexKnowledge(prompt, catalog, scope = 'catalog') {
   const rules = scope === 'catalog' ? [
     'СПРАВОЧНИК TRIPLEX. Это знания о назначении компонентов, а не список доступных экземпляров.',
-    'Доступны для вставки ТОЛЬКО id из каталога Pixso. doc связывает экземпляр со справочником; doc:null означает неподтвержденное назначение. Не выдумывай id и не считай неизвестный компонент TextField.',
+    'Доступны для вставки ТОЛЬКО key/id из текущего каталога Pixso. doc связывает экземпляр со справочником; doc:null означает неподтвержденное назначение. Не выдумывай ссылки и не считай неизвестный компонент TextField.',
     'Рассматривай весь каталог: поля, отображение данных, таблицы, списки, карточки, загрузку файлов, навигацию и структуру. Сначала определи смысл задачи, затем выбирай компонент. Не ограничивайся полями ввода.',
     'Различай ввод и показ: AmountField — ввод денег, Amount — готовая сумма; NumberField — количество; MaskedField — заданный формат; Text — показ текста, TextField — свободный однострочный ввод.',
     'Выбор одного — SelectField, нескольких — MultiselectField; поиск по справочнику — SuggestField; сложные пункты (например кошелёк с именем, ID и балансом) — проверь SelectExtendedField. Не обещай отсутствующие в Pixso свойства.',
@@ -1529,12 +1552,13 @@ async function prepare({ task, standard }) {
 }
 
 function sendPlanRequest(revision) {
+  prepared.requireCatalogIdentity=true;
   const { task, catalog, items } = prepared;
   const components = modelCatalog(catalog);
   const prompt = [
     'Предложи состав экрана по задаче из доступных компонентов Triplex: ввод, отображение данных, структура и другие нужные элементы.',
-    'Используй только числовые ID из каталога. Верни до 12 элементов в порядке вставки.',
-    'Ответь только JSON: {"reply":"Пояснение или вопрос","items":[{"id":1,"text":"Подпись поля","placeholder":"Например, ООО Ромашка","value":"ООО Ромашка","readOnly":false,"error":"Условие — сообщение","optionExample":""}]}.',
+    'Выбирай строки ТОЛЬКО из текущего components. Для каждого элемента передай key из строки и component, равный её doc (или точному name, если doc:null). ID — позиция в этом запросе; не бери номера из справочника, примеров или старой переписки. Верни до 12 элементов.',
+    'Ответь только JSON: {"reply":"Пояснение или вопрос","items":[{"key":"ключ из каталога","component":"тип из doc","text":"Подпись поля","placeholder":"Например, ООО Ромашка","value":"ООО Ромашка","readOnly":false,"error":"Условие — сообщение","optionExample":""}]}.',
     'Подписи на русском, до 120 символов в одну строку. Если подходящих компонентов нет, верни {"reason":"причина"}.',
     'Следуй textStandard для всех подписей и подсказок. Сохраняй термины бизнес-требований.',
     'Для заполняемых полей предложи вымышленное значение value по задаче. Плейсхолдер и значение — разные свойства. Если нужен пустой экран или компонент не принимает текстовое значение, пропусти value.',
@@ -1571,15 +1595,16 @@ function normalizeModelLabel(item, index, previous) {
 }
 
 function requestLabelRepair(message, error) {
-  if (!['MODEL_LABEL', 'MODEL_REVISION'].includes(error.code) || !prepared || !['review', 'reviewDialog'].includes(message.type) || prepared.labelRepairAttempted) return false;
+  if (!['MODEL_LABEL', 'MODEL_REVISION', 'MODEL_IDENTITY'].includes(error.code) || !prepared || !['review', 'reviewDialog'].includes(message.type) || prepared.labelRepairAttempted) return false;
   prepared.labelRepairAttempted = true;
   const dialog = message.type === 'reviewDialog';
   const prompt = [
     'Исправь формат своего ответа. Не меняй смысл задачи и ранее согласованные решения.',
     'Ошибка проверки: ' + error.message,
-    'Используй только uid,id,text,placeholder,value,readOnly,optionExample,values,variant. catalogId/componentId означают id типа. name/confirmed/reason — метаданные, их можно опустить. Для удаления исключи uid из итогового items. Не отменяй правки пользователя.',
-    'У каждой новой строки items обязательны id и непустой text: видимая подпись до 120 символов. Не передавай объект вместо строки. Для существующей строки с uid можно пропустить text, тогда сохранится прежняя подпись.',
-    dialog ? 'Верни JSON с action:list, reply и полным итоговым items с учётом последних правок пользователя. Для замены типа передай uid и новый id.' : 'Верни JSON с reply и полным items: [{id:1,text:"Подпись",placeholder:""}].',
+    'СВЕРЬ ССЫЛКИ: key, id и component должны относиться к ОДНОЙ строке текущего catalog. component копируй из doc или полного name. Старые номера и номера из справочника недействительны. Не меняй требуемый смысл компонента ради ошибочного ID.',
+    'Используй только uid,id,key,component,text,placeholder,value,readOnly,optionExample,values,variant. catalogId/componentId означают id типа. name/confirmed/reason — метаданные, их можно опустить. Для удаления исключи uid из итогового items. Не отменяй правки пользователя.',
+    'У каждой новой строки items обязательны key, component и непустой text: видимая подпись до 120 символов. Не передавай объект вместо строки. Для существующей строки с uid можно пропустить text, тогда сохранится прежняя подпись.',
+    dialog ? 'Верни JSON с action:list, reply и полным итоговым items с учётом последних правок пользователя. Для замены типа передай uid и новый key с component.' : 'Верни JSON с reply и полным items: [{key:"ключ из catalog",component:"doc или точное name",text:"Подпись",placeholder:""}].',
     JSON.stringify({ task: prepared.task, standard: prepared.standard, conversation:modelConversation(),
       catalog: modelCatalog(prepared.catalog), currentItems: prepared.items?.map(({uid,id,text}) => ({uid,id,text})),
       invalidResponse: typeof message.raw === 'string' ? message.raw.slice(0, 8000) : '' })
@@ -1602,10 +1627,8 @@ async function review(raw) {
     throw new Error('В плане должно быть не больше 12 полей.');
   }
   const items = plan.items.map((item, index) => {
-    if (!Number.isInteger(item?.id) || item.id < 1 || item.id > prepared.catalog.length) {
-      throw new Error('GigaCode предложил компонент, которого нет в каталоге.');
-    }
     const text = normalizeModelLabel(item, index);
+    const id=resolveCatalogIdentity(item,prepared.catalog,prepared.requireCatalogIdentity===true);
     const placeholder = item.placeholder;
     if (placeholder != null &&
         (typeof placeholder !== 'string' || placeholder.length > 120 || /[\r\n]/.test(placeholder))) {
@@ -1615,7 +1638,7 @@ async function review(raw) {
     if (value != null && (typeof value !== 'string' || value.length > 120 || /[\r\n]/.test(value))) {
       throw new Error('GigaCode вернул некорректное моковое значение.');
     }
-    return { id: item.id, text, placeholder: placeholder?.trim(), value: value?.trim(), readOnly: item.readOnly === true, optionExample: typeof item.optionExample === 'string' ? item.optionExample.slice(0, 240) : '', error: '' };
+    return { id, text, placeholder: placeholder?.trim(), value: value?.trim(), readOnly: item.readOnly === true, optionExample: typeof item.optionExample === 'string' ? item.optionExample.slice(0, 240) : '', error: '' };
   });
   const parts = new Map();
   for (const id of new Set(items.map(item => item.id))) {
@@ -1653,7 +1676,7 @@ async function review(raw) {
   prepared.stage = "list";
   const previews = prepared.items.map(describeSummary);
   conversation.push({ role: 'assistant', text: plan.reply || '' });
-  if (!prepared.importOnly) send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: plan.reply });
+  if (!prepared.importOnly) send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: 'Предложено компонентов: '+previews.length+'. Проверьте текущий набор ниже.' });
 }
 
 function resolveRemovalRequest(revision, items, catalog) {
@@ -1720,12 +1743,13 @@ async function requestConversation({ revision }) {
     }
     return;
   }
+  prepared.requireCatalogIdentity=true;
   const configuring = prepared.stage !== 'list';
   const definitions = {};
   const components = [];
   for (const item of prepared.items) {
     const result = {
-      uid: item.uid, id: item.id, name: item.name, text: item.text, placeholder: item.placeholder,
+      uid: item.uid, id: item.id, key:prepared.catalog[item.id-1]?.key, component:prepared.catalog[item.id-1]?.knowledgeName || item.name, name: item.name, text: item.text, placeholder: item.placeholder,
       value: item.value, readOnly: item.readOnly, error: item.error,
       optionExample: item.optionExample, confirmed: item.confirmed
     };
@@ -1746,6 +1770,7 @@ async function requestConversation({ revision }) {
     'Ответь JSON: {"reply":"ответ пользователю","action":"reply|configure|list","updates":[{"uid":1,"variant":0,"values":{},"error":""}],"items":[{"uid":1}]}',
     'reply — вопрос или объяснение без изменений. configure — изменения свойств, текстов, ошибок любого существующего компонента.',
     'На этапе list правки подписей, подсказок, значений, readOnly и ошибок передавай в updates через text, placeholder, value, readOnly, error. На остальных этапах используй values и variant.',
+    'При добавлении и замене типа обязательно передай component из doc и key из той же строки каталога. ID не переносится между каталогами. Для сохранения существующего поля достаточно uid. Весь тип сверяется кодом до импорта.',
     'updates содержит только изменяемые поля. values использует точные ключи fields. variant — индекс из variants. Не выдумывай ключи и варианты.',
     'На этапе list любые правки возвращай action:list и полный итоговый items. Удали из items ненужные строки. {"uid":1} сохраняет компонент, {"uid":1,"id":7} ЗАМЕНЯЕТ его тип на id=7 из каталога, сохраняя подпись. {"id":7,"text":"Подпись"} добавляет новый компонент. Поля text/placeholder/value/readOnly меняют настройки строки.',
     'Замены типов и удаление на любом этапе требуют action:list с полным итоговым набором. Не сообщай о замене только в reply. Если нужен уточняющий вопрос, верни action:reply, needsClarification:true и reply с вопросом. Не утверждай, что что-то изменено, без изменений в items/updates.',
@@ -1783,10 +1808,10 @@ function revisionFormatError(message) {
 function normalizeRevisionEntry(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw revisionFormatError('Строка правок должна быть объектом.');
   const result = {};
-  const aliases = { catalogId: 'id', componentId: 'id' };
+  const aliases = { catalogId: 'id', componentId: 'id', componentKey:'key', componentName:'component' };
   // These are descriptive fields sent to the model, not editable settings.
   const metadata = new Set(['name', 'confirmed', 'reason', 'explanation', 'knowledgeName', 'doc', 'fields', 'variants', 'copy', 'missing']);
-  const editable = new Set(['uid','id','text','label','title','placeholder','value','readOnly','optionExample','values','variant','error','remove']);
+  const editable = new Set(['uid','id','key','component','text','label','title','placeholder','value','readOnly','optionExample','values','variant','error','remove']);
   for (const [source, value] of Object.entries(entry)) {
     if (metadata.has(source)) continue;
     if (source === 'action' || source === 'operation') {
@@ -1816,7 +1841,7 @@ function normalizeRevisionResponse(response, currentItems) {
     response.items = response.items.map(normalizeRevisionEntry);
   }
   // A structural patch is also valid: expand it to the complete authoritative list.
-  if (response.action === 'configure' && response.updates?.some(change => change.id !== undefined || change.remove === true)) {
+  if (response.action === 'configure' && response.updates?.some(change => change.id !== undefined || change.key !== undefined || change.remove === true)) {
     if (response.items?.length) throw revisionFormatError('Переданы одновременно структурные updates и непустой items. Нужен один итоговый список.');
     response.action = 'list';
     response.items = currentItems.map(item => ({ uid: item.uid }));
@@ -1857,8 +1882,10 @@ async function reviewListRevision(response) {
       return { remove: true };
     }
     delete patch.remove;
-    const id = patch.id === undefined ? previous?.id : normalize(patch.id);
-    if (!Number.isInteger(id) || !context.catalog[id - 1]) throw new Error('Тип компонента отсутствует в каталоге.');
+    const reference={...patch};
+    if(reference.id===undefined&&reference.key===undefined)reference.id=previous?.id;
+    const changesType=!previous||patch.key!==undefined||patch.component!==undefined||(patch.id!==undefined&&patch.id!==previous.id);
+    const id=resolveCatalogIdentity(reference,context.catalog,context.requireCatalogIdentity===true&&changesType);
     const text = normalizeModelLabel(patch, index, previous);
     if (['text', 'label', 'title'].some(key => patch[key] !== undefined)) patch.text = text;
     delete patch.label;
@@ -1879,7 +1906,7 @@ async function reviewListRevision(response) {
     try {
       prepared = { ...context, importOnly: true };
       await review(JSON.stringify({ items: imports.map(({ spec }) => ({
-        id: spec.id, text: spec.text, placeholder: spec.placeholder, value: spec.value,
+        id: spec.id, key:context.catalog[spec.id-1].key, component:context.catalog[spec.id-1].knowledgeName || context.catalog[spec.id-1].name, text: spec.text, placeholder: spec.placeholder, value: spec.value,
         readOnly: spec.readOnly, optionExample: spec.optionExample
       })) }));
       imported = prepared.items;
@@ -2655,7 +2682,7 @@ function sessionState() {
   let plan = null;
   if (prepared) {
     plan = {};
-    for (const key of ['frameId','bodyId','catalog','task','standard','stage','index','revisionPending']) if (prepared[key] !== undefined) plan[key] = prepared[key];
+    for (const key of ['frameId','bodyId','catalog','task','standard','stage','index','revisionPending','requireCatalogIdentity']) if (prepared[key] !== undefined) plan[key] = prepared[key];
     if (prepared.items) {
       const groups=new Map();plan.variantGroups=[];
       plan.items=prepared.items.map(item=>{

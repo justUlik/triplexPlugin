@@ -58,7 +58,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.8</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.9</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -442,6 +442,7 @@ function renderProposal(items) {
     type.className = 'component-name hint';
     type.textContent = item.name;
     row.append(label, type, removeComponentButton(item));
+    if(item.purpose){const purpose=document.createElement('p');purpose.className='hint';purpose.textContent=item.purpose;row.appendChild(purpose);}
     $('items').appendChild(row);
   }
 }
