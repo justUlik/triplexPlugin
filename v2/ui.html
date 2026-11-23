@@ -321,7 +321,7 @@ function setBusy(value) {
   $('flowSend').textContent=hasFlowResponse?'Отправить на доработку':stateMode==='auto'?'Повторить попытку':'Добавить состояния компонент';
   for(const id of ['flowSend','approveFlow']){$(id).classList.toggle('loading',value);$(id).setAttribute('aria-busy',String(value));}
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
-  $('approveFlow').disabled = value || (flowRenderMode==='components' && [...flowPreviewViews].some(([index,view])=>flowSelection[index]?.included&&(!view.ready||view.error)));
+  $('approveFlow').disabled = value || !flowSelection.some(choice=>choice.included);
   $('layoutStep').hidden = true;
   $('lockLayout').hidden = layoutLocked;
   $('unlockLayout').hidden = !layoutLocked;

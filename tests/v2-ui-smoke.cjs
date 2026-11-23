@@ -58,14 +58,21 @@ await receive({type:'flowProposal',mode:'analytics',reply:'Предлагаю а
 assert.equal(await page.locator('.state-card').count(),2);
 assert.equal(await page.locator('.component-state-group').count(),1);
 assert.equal(await page.locator('.component-state-group>h3').textContent(),'Количество ЦФА');
-assert.equal(await page.locator('#approveFlow').isDisabled(),true);
+assert.equal(await page.locator('#approveFlow').isEnabled(),true);
+const failedPreview=await page.evaluate(()=>sent.filter(m=>m.type==='previewFlowState').at(-1));
+previewRequests.add(failedPreview.previewId);
+await receive({type:'flowPreview',component:true,index:failedPreview.index,previewId:failedPreview.previewId,error:'Ошибка экспорта PNG'});
+assert.equal(await page.locator('#approveFlow').isEnabled(),true);
 await renderQueuedStates();
-assert.equal(await page.locator('.component-state-preview img').count(),2);
+assert.equal(await page.locator('.component-state-preview img').count(),1);
 assert.equal(await page.locator('.state-component').count(),0);
 assert.equal(await page.locator('#approveFlow').isEnabled(),true);
 assert.equal(await page.locator('.flow-buttons button:visible').count(),2);
 await page.screenshot({path:'/tmp/v2-states-proposal.png',fullPage:true});
-await page.locator('.state-card').nth(1).locator('summary').click();
+for(const card of await page.locator('.state-card').all()){await card.locator('summary').click();await card.locator('input[type=checkbox]').uncheck();}
+assert.equal(await page.locator('#approveFlow').isDisabled(),true);
+await page.locator('.state-card').nth(1).locator('input[type=checkbox]').check();
+assert.equal(await page.locator('#approveFlow').isEnabled(),true);
 await page.locator('.state-card').nth(1).locator('label').filter({hasText:'Текст ошибки'}).locator('textarea').fill('Мой согласованный текст ошибки');
 await page.waitForTimeout(350);await renderQueuedStates();
 assert.equal(await page.evaluate(()=>sent.filter(m=>m.type==='previewFlowState').at(-1).edits[1].errorTexts[0]),'Мой согласованный текст ошибки');
