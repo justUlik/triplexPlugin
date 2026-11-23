@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.5' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.6' });
 
 function modelConversation(task = prepared?.task) {
   // The saved transcript is untouched. Older assistant prose repeats plans and
@@ -1288,8 +1288,11 @@ function sourceFields(source) {
 }
 
 function layoutSignature(node) {
-  return JSON.stringify([node.id, node.x, node.y, node.width, node.height, node.layoutMode,
-    node.componentProperties, node.characters, (node.children || []).map(layoutSignature)]);
+  // Serialize the nested tree once. Serializing each child first repeatedly
+  // escapes its JSON at every ancestor and grows exponentially with depth.
+  const snapshot = node => [node.id, node.x, node.y, node.width, node.height, node.layoutMode,
+    node.componentProperties, node.characters, (node.children || []).map(snapshot)];
+  return 'v2:' + JSON.stringify(snapshot(node));
 }
 
 function lockedSource() {
@@ -2595,6 +2598,8 @@ let sessionId;
 let sessionUI = {};
 let sessionReadOnly = false;
 let sessionCreatedAt;
+let lastPersistedSessionId;
+let lastPersistedSnapshot;
 function readHistory() {
   const value = JSON.parse(pixso.root.getPluginData(historyKey) || '{"version":1,"sessions":[]}');
   if (value.version !== 1 || !Array.isArray(value.sessions)) throw new Error('Не удалось прочитать историю диалогов этого файла.');
@@ -2639,6 +2644,7 @@ function persistSession() {
   const state = sessionState();
   const generation = Date.now().toString(36) + Math.random().toString(36).slice(2);
   const serialized = JSON.stringify({ version:1, ui:sessionUI, state });
+  if (lastPersistedSessionId===sessionId && lastPersistedSnapshot===serialized) return;
   const chunks = Math.ceil(serialized.length / 12000);
   for (let i=0;i<chunks;i++) pixso.root.setPluginData(`${historyKey}:${sessionId}:${generation}:${i}`, serialized.slice(i*12000,(i+1)*12000));
   const entry = { id:sessionId, generation, chunks, createdAt:prior?.createdAt || sessionCreatedAt,
@@ -2647,11 +2653,14 @@ function persistSession() {
   history.sessions = [entry, ...history.sessions.filter(s=>s.id!==sessionId)];
   // Commit the index last; interrupted writes leave the previous complete snapshot readable.
   pixso.root.setPluginData(historyKey, JSON.stringify(history));
+  lastPersistedSessionId=sessionId;
+  lastPersistedSnapshot=serialized;
   if (prior) for(let i=0;i<prior.chunks;i++) { try { pixso.root.setPluginData(`${historyKey}:${sessionId}:${prior.generation}:${i}`, ''); } catch {} }
   send('historySaved', { sessionId });
 }
 function newSession() {
   activePreview?.cancel(); activePreview = undefined;
+  lastPersistedSessionId=lastPersistedSnapshot=undefined;
   sessionId = undefined; sessionUI = {}; sessionReadOnly = false; sessionCreatedAt = undefined;
   prepared = null; conversation = []; flow = null; pendingFlow = null; approvedSource = null;
   flowApproved = false; activeFormId = undefined; activeLibraryAssets = undefined; activeLightboxComponent = undefined;
@@ -2690,6 +2699,7 @@ async function restoreSession(id) {
     }
   } catch(error) { warning = error.message + ' История доступна для чтения; восстановите фрейм/библиотеку и откройте диалог заново.'; }
   activePreview?.cancel(); activePreview = undefined;
+  lastPersistedSessionId=lastPersistedSnapshot=undefined;
   sessionId=id; sessionCreatedAt=entry.createdAt; sessionUI=cleanSessionUI(snapshot.ui); sessionReadOnly=Boolean(warning);
   prepared = warning ? null : plan; conversation=state.conversation || []; itemSequence=state.itemSequence || 0;
   flow=state.flow; pendingFlow=null; approvedSource=state.approvedSource; flowApproved=state.flowApproved===true;

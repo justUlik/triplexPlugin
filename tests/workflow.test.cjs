@@ -647,3 +647,30 @@ test('state cards expose editable copy and saved edits restore',async()=>{
   await receive({type:'sessionRestored',sessionId:'saved',stage:'done',formPlaced:true,hasSource:true,layoutLocked:true,flow:{states:[state]},labels:{'1':'Количество'},ui:{hasFlowResponse:true,hasFlowDraft:true,flowEdits:edits}});
   assert.equal(vm.runInContext('flowEdits[0].errorTexts[0]',ctx),'Укажите число');
 });
+
+test('deep layout signature grows linearly and still detects nested text/property/size changes',()=>{
+  const {ctx,run}=backend();
+  let node={id:'leaf',characters:'Label',componentProperties:{Value:{type:'TEXT',value:'10'}}};
+  for(let i=0;i<20;i++)node={id:'frame'+i,width:500,height:400,children:[node]};
+  ctx.deepLayout=node;
+  const before=run('layoutSignature(deepLayout)');
+  assert.ok(before.length<2500,`Signature is too large: ${before.length}`);
+  const nested=JSON.parse(before.slice(3));
+  let leaf=nested;for(let i=0;i<20;i++)leaf=leaf[8][0];
+  assert.equal(leaf[7],'Label');
+  let original=node;for(let i=0;i<20;i++)original=original.children[0];
+  original.characters='Edited';assert.notEqual(run('layoutSignature(deepLayout)'),before);
+  original.characters='Label';original.componentProperties.Value.value='20';assert.notEqual(run('layoutSignature(deepLayout)'),before);
+  original.componentProperties.Value.value='10';node.children[0].width=600;assert.notEqual(run('layoutSignature(deepLayout)'),before);
+});
+test('identical history snapshots do not rewrite file pluginData and changes still persist',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  let writes=0;const original=app.ctx.pixso.root.setPluginData;
+  app.ctx.pixso.root.setPluginData=(key,value)=>{writes++;original(key,value);};
+  app.run(`sessionUI={task:'Проверка'};persistSession()`);const firstWrites=writes;
+  assert.ok(firstWrites>0);
+  app.run('persistSession();persistSession()');assert.equal(writes,firstWrites);
+  app.run(`sessionUI.task='Изменено';persistSession()`);assert.ok(writes>firstWrites);
+  const second=historyFixture(app.storage);second.ctx.savedId=app.run('sessionId');await second.run('restoreSession(savedId)');
+  assert.equal(second.run('sessionUI.task'),'Изменено');
+});

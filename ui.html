@@ -58,7 +58,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.5</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.6</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -361,7 +361,7 @@ $('revise').onclick = () => {
 
 function addMessage(chat, author, text) {
   if (!text) return;
-  if (!replayingHistory && text !== 'GigaChat работает…') transcript.push({chat,author,text:String(text)});
+  if (!replayingHistory && !['GigaChat работает…','Ответ получен. Проверяю и применяю в Pixso…'].includes(text)) transcript.push({chat,author,text:String(text)});
   const item = document.createElement('li');
   item.className = 'message' + (author === 'Вы' ? ' user' : '');
   const name = document.createElement('strong');
@@ -627,6 +627,12 @@ async function requestModel(prompt) {
     if (!response.ok) throw new Error(data.error || 'Ошибка GigaCode CLI.');
     metrics.textContent='Запрос №'+requestNumber+' · '+prompt.length.toLocaleString('ru-RU')+' символов · ответ за '+((Date.now()-startedAt)/1000).toFixed(1)+' с'+(typeof data.metrics?.elapsedMs==='number'?' · CLI '+(data.metrics.elapsedMs/1000).toFixed(1)+' с':'');
     finished=true;
+    status('Ответ GigaCode получен. Проверяю и применяю в Pixso…');
+    if(pendingMessage) {
+      pendingMessage.remove();
+      pendingMessage=null;
+      pendingMessage=addMessage('componentChat','GigaCode','Ответ получен. Проверяю и применяю в Pixso…');
+    }
     return data.result;
   } catch (error) {
     if (error.name === 'AbortError') throw new Error('Ответ не получен за 100 секунд. Нажмите «Повторить отправку».');
