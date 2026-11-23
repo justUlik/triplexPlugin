@@ -96,6 +96,7 @@
   .state-component{display:flex;flex-direction:column;background:var(--field);border-radius:10px;padding:10px 12px;min-height:56px;margin:8px 0 0} .state-component small{font-size:12px;color:var(--muted);line-height:16px} .state-component span{font-size:16px;line-height:20px}
   .state-card details{border:0;padding:0;margin:8px 0 0;background:white}.state-card summary{font-size:12px;font-weight:400;color:var(--accent)}.state-include{display:flex;align-items:center;gap:8px}.state-include input{width:16px;height:16px;accent-color:var(--accent)}
   #stateActions{margin-top:16px}.flow-buttons{display:flex;gap:16px;align-items:start;margin-top:16px}.flow-buttons button{white-space:nowrap}#plan[data-stage=done] .remove-component{display:none}
+  .state-change{font-size:14px;line-height:20px;margin:8px 0 0;white-space:pre-wrap;color:#1f1f22}
 </style>
 </head>
 <body>
@@ -646,11 +647,18 @@ function renderFlowChoices(states,labels={},savedEdits=flowEdits) {
       const field=flowFields.find(field=>field.field===id);
       const row=document.createElement('div');row.className='state-component';
       const type=document.createElement('small');type.textContent=field?.component||'Компонент';
-      const label=document.createElement('span');label.textContent=labels[id]||field?.label||id;row.append(type,label);card.appendChild(row);
+      const label=document.createElement('span');label.textContent=labels[id]||field?.label||id;row.append(type,label);
+      const changes=document.createElement('p');changes.className='state-change';
+      const refreshChanges=()=>{
+        const messages=state.errors.flatMap((error,j)=>error.field===id?['Ошибка: '+edit.errorTexts[j]]:[]);
+        if(Object.prototype.hasOwnProperty.call(edit.values,id))messages.unshift(edit.values[id]===''?'Поле пустое':'В поле: '+edit.values[id]);
+        changes.textContent=messages.join('\n');changes.hidden=!messages.length;
+      };
+      refreshChanges();row.appendChild(changes);card.appendChild(row);row.updateChanges=refreshChanges;
     }
     if(!affected.length){const note=document.createElement('p');note.className='hint';note.textContent='Состояние формы';card.appendChild(note);}
     const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Тексты и свойства';details.appendChild(summary);card.appendChild(details);
-    function changed(){flowApproved=false;hasFlowDraft=flowStates.length>0;view.token=++flowPreviewSequence;if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}view.area.replaceChildren();view.note.textContent='Настройки изменены. Откройте превью заново.';post('invalidateFlow');scheduleSessionSave();setBusy(false);}
+    function changed(){card.querySelectorAll('.state-component').forEach(row=>row.updateChanges?.());flowApproved=false;hasFlowDraft=flowStates.length>0;view.token=++flowPreviewSequence;if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}view.area.replaceChildren();view.note.textContent='Настройки изменены. Откройте превью заново.';post('invalidateFlow');scheduleSessionSave();setBusy(false);}
     function editable(title,value,write){const label=document.createElement('label');label.textContent=title;const input=document.createElement('textarea');input.maxLength=3000;input.value=value;input.oninput=()=>{write(input.value);changed();};label.appendChild(input);details.appendChild(label);}
     const take=document.createElement('label');take.className='state-include';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=flowSelection[i].included;checkbox.onchange=()=>{flowSelection[i].included=checkbox.checked;flowDecisions.set(JSON.stringify([state.name,state.condition]),checkbox.checked);changed();};take.append(checkbox,document.createTextNode('Включить состояние'));details.appendChild(take);
     editable('Название состояния',edit.name,value=>{edit.name=value;heading.textContent=(i+1)+'. '+value;});
@@ -923,6 +931,7 @@ window.addEventListener('message', async event => {
       $('feedback').value = '';
       hasFlowDraft = message.states.length > 0;
       addMessage('flowChat', 'GigaCode', message.reply);
+      for(const limitation of message.limitations||[])addMessage('flowChat','Плагин','Пока не удалось собрать '+limitation.interaction+' для поля «'+limitation.label+'».');
       renderFlowChoices(message.states, message.labels);
       status('');
       break;

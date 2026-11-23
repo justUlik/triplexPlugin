@@ -356,4 +356,88 @@ module._compile(source + `
    app.set.children[1].name+=' , Filled=False';app.set.children.push(second);
    assert.throws(()=>app.run('resolveStateVariant(field,{variant:"Focus"})'),/неоднозначно/);
  });
+
+ test('manual component text is synchronized before insertion and subsequent state requests',async()=>{
+   const app=revisionFixture();await seedB2B(app);
+   app.components['3'].componentPropertyDefinitions['Value#1']={type:'TEXT',defaultValue:'10'};
+   app.components['3'].componentPropertyDefinitions['Placeholder#1']={type:'TEXT',defaultValue:'Введите'};
+   app.run('prepared.revisionPending=false;prepared.items=[prepared.items[2]]');
+   await app.run('openProperties()');
+   await app.run('configureItem({index:0,variant:0,values:{"Label#1":"Моё название","Value#1":"350","Placeholder#1":"Моя подсказка"}},true)');
+   assert.equal(app.run('prepared.items[0].text'),'Моё название');
+   assert.equal(app.run('prepared.items[0].value'),'350');
+   assert.equal(app.run('prepared.items[0].placeholder'),'Моя подсказка');
+   const create=app.components['3'].createInstance;
+   app.components['3'].createInstance=()=>{const instance=create();instance.componentProperties['Value#1']={type:'TEXT',value:'10'};instance.componentProperties['Placeholder#1']={type:'TEXT',value:'Введите'};instance.metadata={};instance.setPluginData=(key,value)=>instance.metadata[key]=value;return instance;};
+   await app.run('apply()');
+   assert.equal(app.inserted[0].values['Label#1'],'Моё название');
+   assert.equal(app.inserted[0].metadata['triplex-field-label'],'Моё название');
+   assert.equal(app.run('approvedSource.components[0].text'),'Моё название');
+   assert.equal(app.run('approvedSource.components[0].value'),'350');
+ });
+ test('state context reads manually edited nested labels and current input instead of old metadata',async()=>{
+   const app=statePreviewFixture();const field=app.source.children[0];
+   delete field.componentProperties['Label#1'];
+   field.componentProperties['Value#1'].value='350';
+   field.children=[{type:'FRAME',name:'Label',children:[{type:'TEXT',name:'Text',characters:'Моя подпись с холста'}]}];
+   await app.run('requestStates({mode:"auto",standard:""})');
+   const context=JSON.parse(app.run('JSON.stringify(confirmedFlowFields(pixso.getNodeById("source"))[0])'));
+   assert.equal(context.label,'Моя подпись с холста');assert.equal(context.confirmed.text,'Моя подпись с холста');
+   assert.equal(context.currentCopy.value,'350');assert.equal(context.confirmed.value,'350');
+   assert.match(app.messages.at(-1).prompt,/Моя подпись с холста/);
+ });
+ test('variant swaps preserve edited hashed text properties without resetting the target active state',async()=>{
+   const app=stateVariantFixture();const copy=app.source.clone();const field=copy.children[0];
+   field.mainComponent=app.set.children[0];
+   field.componentProperties={'Label#old':{type:'TEXT',value:'Моя подпись'},'Value#old':{type:'TEXT',value:'350'},'Placeholder#old':{type:'TEXT',value:'Моя подсказка'},'Active#old':{type:'BOOLEAN',value:false},'Required#old':{type:'BOOLEAN',value:true}};
+   field.swapComponent=variant=>{field.mainComponent=variant;field.componentProperties={'Label#new':{type:'TEXT',value:'Label'},'Value#new':{type:'TEXT',value:''},'Placeholder#new':{type:'TEXT',value:'Placeholder'},'Active#new':{type:'BOOLEAN',value:true},'Required#new':{type:'BOOLEAN',value:false}};};
+   app.ctx.copy=copy;
+   await app.run('applyStateToCopy(copy,{condition:"Фокус",values:{},variants:[{field:"1",key:"variant-1",variant:"Size=MD, Theme=Light, State=Focus"}],errors:[]},pixso.getNodeById("source"))');
+   assert.equal(field.componentProperties['Label#new'].value,'Моя подпись');assert.equal(field.componentProperties['Value#new'].value,'350');
+   assert.equal(field.componentProperties['Placeholder#new'].value,'Моя подсказка');assert.equal(field.componentProperties['Active#new'].value,true);assert.equal(field.componentProperties['Required#new'].value,true);
+ });
+ test('variant restoration preserves nested user copy even when the target Description is hidden',async()=>{
+   const app=backend({loadFontAsync:async()=>{}});
+   const layer=value=>({type:'TEXT',name:'Text',characters:value,fontName:{family:'Inter',style:'Regular'}});
+   app.ctx.field={componentProperties:{},children:[{type:'FRAME',name:'Label',children:[layer('Моя подпись')]},{type:'FRAME',name:'Description',children:[layer('Моё описание')]}]};
+   app.ctx.copySnapshot=await app.run('captureFieldCopy(field)');
+   app.ctx.field.children=[{type:'FRAME',name:'Label',children:[layer('Label')]},{type:'FRAME',name:'Description',visible:false,children:[layer('Description')]}];
+   await app.run('restoreFieldCopy(field,copySnapshot)');
+   assert.equal(app.ctx.field.children[0].children[0].characters,'Моя подпись');assert.equal(app.ctx.field.children[1].children[0].characters,'Моё описание');
+   assert.equal(app.ctx.field.children[1].visible,false);
+ });
+ test('state proposals drop unchanged and duplicate screens and do not expose model jargon',async()=>{
+   const app=statePreviewFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   await app.run('reviewFlow({raw:JSON.stringify({reply:"stateCapabilities.opened пуст; справочник не прочитан",states:[{name:"Исходный экран",condition:"Открыли",values:{"1":"10"}},{name:"Ввод",condition:"Первое условие",values:{"1":"20"}},{name:"Ввод снова",condition:"Второе условие",values:{"1":"20"}}]})})');
+   assert.equal(app.run('flow.states.length'),1);
+   assert.doesNotMatch(app.run('flow.reply'),/stateCapabilities|справочник/);
+   assert.match(app.run('flow.states[0].condition'),/Второе условие/);
+ });
+ test('manual error edits survive a revision response that repeats the original model text',async()=>{
+   const app=statePreviewFixture();
+   app.run('flow.mode="auto";flow.analytics="";let editedDraft={sourceKey:flowStateKey(flow.states[0]),name:flow.states[0].name,condition:flow.states[0].condition,values:{"1":""},errorTexts:["Мой согласованный текст"]}');
+   await app.run('requestStates({mode:"auto",standard:"",feedback:"Добавь другое состояние",edits:[editedDraft]})');
+   await app.run('reviewFlow({raw:JSON.stringify({reply:"Обновил",states:[{name:"Пустое количество",condition:"Попытка отправки",values:{"1":""},errors:[{field:"1",text:"Введите количество"}]}]})})');
+   assert.equal(app.run('flow.states[0].errors[0].text'),'Мой согласованный текст');
+   app.ctx.copy=app.source.clone();
+   await app.run('applyStateToCopy(copy,flow.states[0],pixso.getNodeById("source"))');
+   assert.equal(app.ctx.copy.children[0].componentProperties['Error#1'].value,'Мой согласованный текст');
+ });
+
+ test('chat text changes update actual properties and metadata together',async()=>{
+   const app=revisionFixture();await seedB2B(app);app.run('prepared.revisionPending=false;prepared.items=[prepared.items[2]]');
+   await app.run('openProperties()');
+   await app.run('reviewConversation(JSON.stringify({action:"configure",reply:"Изменил",updates:[{uid:3,text:"Текст из чата"}]}))');
+   assert.equal(app.run('prepared.items[0].values["Label#1"]'),'Текст из чата');assert.equal(app.run('prepared.items[0].text'),'Текст из чата');
+   await app.run('reviewConversation(JSON.stringify({action:"configure",reply:"Изменил",updates:[{uid:3,values:{"Label#1":"Текст через values"}}]}))');
+   assert.equal(app.run('prepared.items[0].text'),'Текст через values');
+ });
+ test('component variant changes retain the most recent input across property suffix changes',async()=>{
+   const app=revisionFixture();await seedB2B(app);app.run('prepared.revisionPending=false;prepared.items=[prepared.items[2]]');
+   app.ctx.newVariant={name:'Focus',componentPropertyDefinitions:{'Label#new':{type:'TEXT',defaultValue:'Label'}}};
+   app.run('prepared.items[0].variants=[prepared.items[0].variants[0],newVariant]');
+   await app.run('openProperties()');
+   await app.run('configureItem({index:0,variant:1,values:{"Label#1":"Последняя ручная правка"}},false)');
+   assert.equal(app.run('prepared.items[0].values["Label#new"]'),'Последняя ручная правка');assert.equal(app.run('prepared.items[0].text'),'Последняя ручная правка');
+ });
 `, __filename);

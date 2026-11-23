@@ -1962,15 +1962,115 @@ function lockedSource() {
   return source;
 }
 
+const fieldCopySnapshots=new WeakMap();
+function textCopyRole(name) {
+  if(isLabel(name))return 'label';
+  if(/^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i.test(name))return 'placeholder';
+  if(stateRolePatterns.description.test(name))return 'description';
+  if(stateRolePatterns.value.test(name))return 'value';
+}
+function copyContext(node,snapshot=fieldCopySnapshots.get(node)) {
+  const result={};
+  for(const role of ['label','placeholder','value','description']) {
+    const layers=(snapshot?.layers||[]).filter(layer=>layer.role===role);
+    const properties=Object.entries(node.componentProperties||{}).filter(([key,prop])=>prop.type==='TEXT'&&textCopyRole(key)===role);
+    if(layers.length===1)result[role]=layers[0].value;
+    else if(properties.length===1)result[role]=properties[0][1].value;
+  }
+  return result;
+}
+async function captureFieldCopy(node,includeHidden=false) {
+  const properties=Object.fromEntries(Object.entries(node.componentProperties||{}).filter(([,prop])=>['TEXT','BOOLEAN'].includes(prop.type)).map(([key,prop])=>[key,{type:prop.type,value:prop.value}]));
+  const layers=[],stack=[{node,path:[],parents:[]}];let visited=0;
+  while(stack.length) {
+    const entry=stack.pop(),current=entry.node;
+    if(current.visible===false&&!includeHidden)continue;
+    if(current.type==='TEXT') {
+      const ownRole=textCopyRole(current.name||'');
+      const parentRole=entry.parents.map(parent=>textCopyRole(parent.name||'')).reverse().find(Boolean);
+      const role=(/^(?:text|content|текст)(?:#|$)/i.test(current.name||'')?parentRole:ownRole)||ownRole||parentRole;
+      if(role)layers.push({path:entry.path,name:current.name,role,value:current.characters});
+    }
+    Array.from(current.children||[]).forEach((child,index)=>stack.push({node:child,path:[...entry.path,index],parents:[...entry.parents,current]}));
+    if(++visited%100===0)await yieldToEditor();
+  }
+  const snapshot={properties,layers};fieldCopySnapshots.set(node,snapshot);return snapshot;
+}
+async function restoreFieldCopy(node,snapshot) {
+  const actual=Object.entries(node.componentProperties||{}),values={};
+  const base=key=>key.replace(/#.*$/,'').trim().toLowerCase();
+  const stateBoolean=key=>/active|focus|typing|open|expand|collapse|error|invalid|disabled|enabled|filled|empty|selected|checked|pressed|loading|readonly|read.only|hover|состояни|ошиб|фокус/i.test(key);
+  for(const [key,prop] of Object.entries(snapshot.properties)) {
+    if(prop.type==='BOOLEAN'&&stateBoolean(key))continue;
+    const exact=actual.find(([name,target])=>name===key&&target.type===prop.type);
+    let matches=exact?[exact]:actual.filter(([name,target])=>base(name)===base(key)&&target.type===prop.type);
+    if(!matches.length&&prop.type==='TEXT') {
+      const role=textCopyRole(key);
+      const sourceMatches=Object.entries(snapshot.properties).filter(([name,source])=>source.type==='TEXT'&&textCopyRole(name)===role);
+      if(role&&sourceMatches.length===1)matches=actual.filter(([name,target])=>target.type==='TEXT'&&textCopyRole(name)===role);
+    }
+    if(matches.length===1)values[matches[0][0]]=prop.value;
+    else if(prop.type==='TEXT')throw new Error('Не удалось сохранить текст «'+key+'» после смены варианта. Копия не создана.');
+  }
+  if(Object.keys(values).length)await setInstanceValues(node,values,node.name);
+  if(!snapshot.layers.length)return;
+  const target=await captureFieldCopy(node,true);
+  for(const layer of snapshot.layers) {
+    const exact=target.layers.find(candidate=>candidate.role===layer.role&&candidate.name===layer.name&&candidate.path.join('.')===layer.path.join('.'));
+    let matches=exact?[exact]:target.layers.filter(candidate=>candidate.role===layer.role&&candidate.name===layer.name);
+    if(!matches.length&&snapshot.layers.filter(candidate=>candidate.role===layer.role).length===1)matches=target.layers.filter(candidate=>candidate.role===layer.role);
+    if(matches.length!==1)throw new Error('Не удалось сохранить '+({label:'подпись',placeholder:'подсказку',value:'значение',description:'описание'}[layer.role]||'текст')+' после смены варианта. Копия не создана.');
+    const text=matches[0].path.reduce((parent,index)=>parent.children?.[index],node);
+    await setTextLayerValue(text,layer.value);
+  }
+}
+function mapVariantCopyValues(values,fromFields,toFields) {
+  const prior=new Map(fromFields),target=Array.from(toFields),result={};
+  const base=key=>key.replace(/#.*$/,'').toLowerCase();
+  for(const [key,value] of Object.entries(values||{})) {
+    const type=typeof value==='boolean'?'BOOLEAN':typeof value==='string'?'TEXT':undefined;
+    if(!type||prior.get(key)?.type!==type)continue;
+    const exact=target.find(([name,prop])=>name===key&&prop.type===type);
+    let matches=exact?[exact]:target.filter(([name,prop])=>prop.type===type&&base(name)===base(key));
+    if(!matches.length&&type==='TEXT') {
+      const role=textCopyRole(key);
+      if(role&&fromFields.filter(([name,prop])=>prop.type==='TEXT'&&textCopyRole(name)===role).length===1)matches=target.filter(([name,prop])=>prop.type==='TEXT'&&textCopyRole(name)===role);
+    }
+    if(matches.length===1)result[matches[0][0]]=value;
+  }
+  return result;
+}
+function applySemanticCopyPatch(item,patch,fields) {
+  for(const [semantic,role] of [['text','label'],['placeholder','placeholder'],['value','value']]) {
+    if(patch[semantic]===undefined)continue;
+    const matches=Array.from(fields).filter(([key,prop])=>prop.type==='TEXT'&&textCopyRole(key)===role);
+    if(matches.length!==1)throw revisionFormatError('Не удалось однозначно применить текст '+semantic+'. Передай values с точным ключом из fields.');
+    const key=matches[0][0];
+    if(patch.values&&Object.prototype.hasOwnProperty.call(patch.values,key)&&patch.values[key]!==patch[semantic])throw revisionFormatError('Текст '+semantic+' противоречит свойству '+key+'.');
+    item.values[key]=patch[semantic];
+  }
+}
+
+function syncItemCopy(item) {
+  if(item.texts)item.texts={...item.texts};
+  const fields=editableProperties(item.variants[item.variant]);
+  for(const [semantic,role] of [['text','label'],['placeholder','placeholder'],['value','value']]) {
+    const matches=fields.filter(([key,prop])=>prop.type==='TEXT'&&textCopyRole(key)===role&&Object.prototype.hasOwnProperty.call(item.values||{},key));
+    if(matches.length===1){item[semantic]=item.values[matches[0][0]];if(item.texts)delete item.texts[matches[0][0]];}
+  }
+}
+
 function confirmedFlowFields(source) {
   return sourceFields(source).map(node=>{
     const id=node.getPluginData('triplex-field-id');
     const approved=approvedSource?.components?.find(item=>String(item.uid)===id);
     const name=node.getPluginData('triplex-component-name') || approved?.name || node.mainComponent?.parent?.name || node.name;
-    const label=Object.entries(node.componentProperties||{}).find(([key,prop])=>isLabel(key)&&prop.type==='TEXT')?.[1].value || node.getPluginData('triplex-field-label');
+    const currentCopy=copyContext(node);
+    const label=currentCopy.label ?? node.getPluginData('triplex-field-label');
     const doc=componentKnowledge({name});
     return { field:id,label,component:name,purpose:doc?.use || 'Назначение не сопоставлено',
-      confirmed:approved ? {text:approved.text,value:approved.value,placeholder:approved.placeholder,readOnly:approved.readOnly,optionExample:approved.optionExample} : undefined,
+      currentCopy,
+      confirmed:{text:label,value:currentCopy.value??approved?.value,placeholder:currentCopy.placeholder??approved?.placeholder,readOnly:approved?.readOnly,optionExample:approved?.optionExample},
       width:node.width,height:node.height,properties:node.componentProperties,stateCapabilities:componentStateCapabilities(node),
       currentVariant:node.mainComponent?.name,
       variants:availableStateVariants(node).filter(variant=>compatibleStateVariant(node,variant)).map(variant=>variant.name),
@@ -2080,6 +2180,7 @@ async function requestStates(message) {
     flow=null;invalidateFlow();
   }
   lockedSource();
+  for(const node of sourceFields(source))await captureFieldCopy(node);
   if(flow && (flow.mode!==mode || flow.analytics!==analytics)) {flow=null;invalidateFlow();}
   requestFlow({...message,mode,analytics:mode==='analytics'?analytics:'',requirements,standard:approvedSource.standard || message.standard || '',feedback:message.feedback || ''});
 }
@@ -2119,29 +2220,69 @@ async function previewFlowState({ index, edits, selection, previewId }) {
   finally {if(copy&&!copy.removed)copy.remove();}
 }
 
+function flowDraftOverrides(before,after) {
+  return before.flatMap((state,i)=>{
+    const draft=after[i];
+    if(!draft)return [];
+    const errors=state.errors.flatMap((error,j)=>draft.errors[j]?.text!==error.text?[{field:error.field,before:error.text,after:draft.errors[j].text}]:[]);
+    const values=Object.entries(state.values).filter(([id,value])=>draft.values[id]!==value).map(([id,value])=>({id,before:value,after:draft.values[id]}));
+    return errors.length||values.length||state.name!==draft.name||state.condition!==draft.condition?[{name:state.name,condition:state.condition,editedName:draft.name,editedCondition:draft.condition,errors,values}]:[];
+  });
+}
+function restoreFlowDraftOverrides(plan,overrides=[]) {
+  for(const edit of overrides) {
+    const state=plan.states.find(state=>[edit.name,edit.editedName].includes(state.name)&&[edit.condition,edit.editedCondition].includes(state.condition));
+    if(!state)continue;
+    if(state.name===edit.name)state.name=edit.editedName;
+    if(state.condition===edit.condition)state.condition=edit.editedCondition;
+    for(const change of edit.values)if(state.values[change.id]===change.before)state.values[change.id]=change.after;
+    for(const change of edit.errors)for(const error of state.errors)if(error.field===change.field&&error.text===change.before)error.text=change.after;
+  }
+}
+function stateHasVisibleChanges(state,nodes) {
+  if(state.errors.length)return true;
+  if((state.variants||[]).some(choice=>choice.variant!==nodes.get(choice.field)?.mainComponent?.name))return true;
+  if((state.properties||[]).some(patch=>Object.entries(patch.values).some(([key,value])=>nodes.get(patch.field)?.componentProperties?.[key]?.value!==value)))return true;
+  return Object.entries(state.values).some(([id,value])=>copyContext(nodes.get(id)).value!==value);
+}
+function uniqueChangedStates(states,nodes) {
+  const seen=new Map();
+  const sorted=entries=>entries.slice().sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+  for(const state of states) {
+    if(!stateHasVisibleChanges(state,nodes))continue;
+    const key=JSON.stringify({values:sorted(Object.entries(state.values)),variants:sorted((state.variants||[]).map(v=>[v.field,v.variant])),properties:sorted((state.properties||[]).map(p=>[p.field,sorted(Object.entries(p.values))])),errors:state.errors.map(e=>[e.field,e.text])});
+    const prior=seen.get(key);
+    if(prior){if(prior.condition!==state.condition)prior.condition+='; '+state.condition;}
+    else seen.set(key,state);
+  }
+  return [...seen.values()];
+}
+
 function requestFlow({ requirements, feedback, standard, selection, edits, mode = "auto", analytics = "" }) {
   const source = lockedSource();
   if (typeof requirements !== 'string' || !requirements.trim()) throw new Error('Вставьте бизнес-требования.');
   if (requirements.length > 12000 || typeof standard !== 'string' || standard.length > 8000 ||
       typeof feedback !== 'string' || feedback.length > 2000) throw new Error('Сократите входной текст.');
+  const previous=flow?editedFlowStates(edits):undefined;
   const context = { requirements: requirements.trim(), standard: standard.trim(), mode, analytics, feedback };
-  pendingFlow = context;
+  pendingFlow = {...context,draftOverrides:flow&&previous?flowDraftOverrides(flow.states,previous):[]};
   flowApproved = false;
   send('flowRequest', { prompt: [
     'Предложи состояния взаимодействия и ошибки для уже собранной формы. Не меняй состав компонентов.',
     'Обязательно проверь раскрытый Select/Multiselect/Suggest и активное печатание TextField/MaskedField/AmountField/NumberField: фокус/active плюс пример values. Добавляй только применимые реальные variants или BOOLEAN properties. Не имитируй раскрытие изменением текста.',
-    'В режиме analytics правила и точные тексты из analytics имеют приоритет. Не добавляй выдуманные бизнес-ошибки; стандартные состояния взаимодействия допустимы. В auto предложи релевантные ошибки сам; неподтвержденные правила отметь как гипотезы.',
+    'В режиме analytics правила и точные тексты из analytics имеют приоритет. В auto используй только ограничения, явно указанные в задаче или свойствах поля. Если правил не хватает, не создавай гипотетические ошибки ради количества: достаточно доступных взаимодействий.',
     'Triplex: TextFieldBase содержит FormField (active/status) и отдельный FormFieldDescription. Текст ошибки обычно записывается в Description, а error/status включается отдельно. React props не равны свойствам Pixso: используй только реальные поля properties/variants/stateCapabilities.',
-    'Проверь применимость: пустое обязательное поле, формат, диапазон, зависимости полей, недоступные данные, сеть, сервер, загрузка, успех, disabled и read-only. Не ограничивайся одной ошибкой. Неподтвержденные бизнес-правила помечай в condition как гипотезы для согласования; не выдумывай числовые ограничения.',
+    'Предложи до 8 полезных отличий от текущего экрана, а не общий список всех возможных ошибок. Не добавляй начальную пустую форму, если это уже исходный макет. Для поля предложи конкретное взаимодействие или подтверждённую проверку. Не выдумывай лимиты, минимумы, обязательность, зависимости, сеть, успех или загрузку без основания в задаче/аналитике либо реально доступного состояния.',
     'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
     'Верни только JSON: {"reply":"Объяснение","states":[{"name":"Название","condition":"Когда показать","values":{"field-id":"значение"},"variants":[{"field":"field-id","variant":"точное имя доступного варианта"}],"properties":[{"field":"field-id","values":{"точный ключ BOOLEAN/TEXT из properties":true}}],"errors":[{"field":"field-id или пустая строка для формы","text":"Текст ошибки"}]}]}.',
     'Для каждого состояния обязательно укажи name и condition. Если нет значений/ошибок, передай values:{} и errors:[], без null. field копируй из fields.field, не из номера каталога или позиции строки.',
     'Дай до 24 релевантных состояний. properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields; для variants скопируй key из variantOptions (предпочтительно) или точное полное имя. Не передавай название оси «State»/«Состояние» вместо значения. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
+    'fields.currentCopy — актуальные тексты с холста, включая ручные правки. Сохраняй подписи, placeholders и описания. Меняй только явно заданные в состоянии значения и Description соответствующей ошибки. Старые подписи из истории не должны возвращаться.',
     'fields — фактически подтверждённые компоненты с холста, их назначение, текущие свойства и доступные варианты. confirmedTask и decisions — исходная задача и решения пользователя. Следуй им; не возвращай удалённые или заменённые компоненты.',
     'Не предлагай ввод для компонента отображения Amount/Text. Учитывай поведение компонента: не предлагай невозможные действия (например ввод букв, если поле их отфильтровывает). Не меняй размер или тему ради ошибки. Используй только точные варианты из fields.',
-    'Если раскрытие/active отсутствуют и в variants и в BOOLEAN properties, не включай их в states, а явно объясни ограничение в reply. В reply максимум два коротких предложения о предложениях. Не пересказывай устройство формы и каталог. Для каждого состояния дай понятные name и condition, конкретные values и точные тексты errors. Не делай выводов об отсутствии компонентов во всей дизайн-системе по ограниченной справке.',
+    'Если нужное взаимодействие нельзя собрать по variants/BOOLEAN, не имитируй его. В reply говори по-русски о форме: без имён API, stateCapabilities, рассуждений о непрочитанных справочниках и списков гипотез. В reply максимум два коротких предложения о предложениях. Не пересказывай устройство формы и каталог. Для каждого состояния дай понятные name и condition, конкретные values и точные тексты errors. Не делай выводов об отсутствии компонентов во всей дизайн-системе по ограниченной справке.',
     JSON.stringify({ ...context, confirmedTask:approvedSource?.task || requirements, decisions:approvedSource?.decisions || modelConversation(), fields:confirmedFlowFields(source),
-      previous:flow ? editedFlowStates(edits) : undefined,selection,feedback })
+      previous,selection,feedback })
   ].join('\n') });
 }
 
@@ -2176,17 +2317,17 @@ function completeInteractionStates(plan,nodes) {
     const doc=componentKnowledge({name})?.name||name;
     const role=/select|suggest/i.test(doc)?'opened':/(?:text|masked|amount|number|textarea)field/i.test(doc)?'active':null;
     if(!role||isReadOnly(node.mainComponent?.name||''))continue;
-    const label=node.getPluginData('triplex-field-label')||name;
+    const label=copyContext(node).label??node.getPluginData('triplex-field-label')??name;
     const control=stateControl(node,role);
-    if(!control){missing.push(label+' — '+(role==='opened'?'раскрытие':'активное состояние'));continue;}
+    if(!control){missing.push({field:id,label,interaction:role==='opened'?'раскрытие списка':'активное поле'});continue;}
     const covered=plan.states.some(state=>(state.variants||[]).some(choice=>choice.field===id&&variantMatchesState(choice.variant,role)) || (state.properties||[]).some(patch=>patch.field===id&&Object.entries(patch.values).some(([key,value])=>componentStateCapabilities(node)[role].includes(key)&&value===true)));
     if(!covered){
       const valueProp=Object.entries(node.componentProperties||{}).find(([key,prop])=>prop.type==='TEXT'&&stateRolePatterns.value.test(key));
-      const example=valueProp?(String(valueProp[1].value||'')||(/number|amount/i.test(doc)?'10':/masked/i.test(doc)?'':'Пример ввода')):'';
+      const example=valueProp?(String(copyContext(node).value??valueProp[1].value??'')||(/number|amount/i.test(doc)?'10':/masked/i.test(doc)?'':'Пример ввода')):'';
       plan.states.push({name:(role==='opened'?'Раскрытый вариант':'Активное печатание')+' · '+label,condition:role==='opened'?'Пользователь раскрывает список':'Пользователь устанавливает фокус и вводит значение',values:role==='active'&&valueProp?{[id]:example}:{},errors:[],...control});
     }
   }
-  if(missing.length)plan.reply+=' Недоступны в подключённой библиотеке: '+missing.join('; ')+'.';
+  plan.limitations=missing;
 }
 
 function requestFlowRepair(message,error) {
@@ -2263,12 +2404,17 @@ function reviewFlow({ raw }) {
   if (!pendingFlow || typeof raw !== 'string' || raw.length > 40000) throw new Error('Некорректный ответ GigaCode.');
   const nodes = new Map(sourceFields(source).map(node=>[node.getPluginData('triplex-field-id'),node]));
   const plan = normalizeStatePlan(parseModelResponse(raw),nodes);
+  restoreFlowDraftOverrides(plan,pendingFlow.draftOverrides);
+  plan.states=plan.states.filter(state=>Object.keys(state.values).length||state.errors.length||state.variants.length||state.properties.length);
   for(const state of plan.states)validateStateBindings(state,nodes);
   completeInteractionStates(plan,nodes);
   for(const state of plan.states) validateStateBindings(state,nodes);
-  flow = { ...pendingFlow, states: plan.states, reply: plan.reply };
+  plan.states=uniqueChangedStates(plan.states,nodes);
+  const modelReply=plan.reply;
+  plan.reply=plan.states.length?'Подготовил вариантов: '+plan.states.length+'. Проверьте изменения ниже.':'Пока не удалось собрать новые варианты. Уточните нужные состояния в аналитике.';
+  flow = { ...pendingFlow, states: plan.states, reply: plan.reply,modelReply,limitations:plan.limitations };
   pendingFlow = null;
-  send('flowProposal', { reply: plan.reply, states: plan.states, mode:flow.mode, analytics:flow.analytics, fields:confirmedFlowFields(source), labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
+  send('flowProposal', { reply: plan.reply, states: plan.states,limitations:flow.limitations, mode:flow.mode, analytics:flow.analytics, fields:confirmedFlowFields(source), labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
 }
 
 function validateStateBindings(state,nodes) {
@@ -2321,10 +2467,9 @@ async function applyStateToCopy(copy,state,source) {
     const field = fields.get(choice.field);
     const variant = field && resolveStateVariant(field,choice);
     if (!variant || typeof field.swapComponent !== 'function') throw new Error('Недоступен вариант «' + choice.variant + '». Уточните состояние в чате.');
-    const values = field.componentProperties || {};
+    const copySnapshot=await captureFieldCopy(field);
     field.swapComponent(variant);
-    const compatible = Object.fromEntries(Object.entries(values).filter(([key, prop]) => ['TEXT', 'BOOLEAN'].includes(prop.type) && field.componentProperties?.[key]?.type === prop.type).map(([key, prop]) => [key, prop.value]));
-    if (Object.keys(compatible).length) field.setProperties(compatible);
+    await restoreFieldCopy(field,copySnapshot);
   }
   for(const patch of state.properties || []) {
     const field=fields.get(patch.field);
@@ -2889,7 +3034,7 @@ async function reviewListRevision(response) {
     const fields = new Map(editableProperties(item.variants[item.variant]));
     if(replace&&previous&&patch.value===undefined&&componentKnowledge({name:item.name})?.name==='Text') {
       const oldValue=Object.entries(previous.values||{}).find(([key,value])=>typeof value==='string'&&/^(?:value|amount|sum|значение|сумма)(?:#|$)/i.test(key));
-      if(oldValue)item.value=oldValue[1];
+      if(oldValue){item.value=oldValue[1];const valueFields=[...fields].filter(([key,prop])=>prop.type==='TEXT'&&textCopyRole(key)==='value');if(valueFields.length===1)item.values={...item.values,[valueFields[0][0]]:oldValue[1]};}
     }
     // Preserve compatible manual values only within the same component type.
     if (!replace && item.variant !== previous.variant) {
@@ -2917,6 +3062,7 @@ async function reviewListRevision(response) {
         item.values[key] = value;
       }
     }
+    syncItemCopy(item);
     item.error = '';
     if (replace || revisionSummary([previous], [item]).length) item.confirmed = false;
     return item;
@@ -2979,7 +3125,8 @@ async function reviewConversation(raw) {
     }
     if (variant !== current.variant) await ensureComponentLabel(candidate.variants[variant]);
     const fields = new Map(editableProperties(candidate.variants[variant]));
-    candidate.values = Object.fromEntries(Object.entries(current.values || {}).filter(([key]) => fields.has(key)));
+    candidate.values = variant===current.variant?{...current.values}:mapVariantCopyValues(current.values,editableProperties(current.variants[current.variant]),Array.from(fields));
+    applySemanticCopyPatch(candidate,change,fields);
     for (const [key, value] of Object.entries(change.values || {})) {
       if (!fields.has(key) || (fields.get(key).type === 'BOOLEAN' ? typeof value !== 'boolean' : typeof value !== 'string' || value.length > 3000)) {
         throw new Error('Ответ содержит недоступное свойство.');
@@ -2990,6 +3137,7 @@ async function reviewConversation(raw) {
       if (typeof change.error !== 'string' || change.error.length > 3000) throw new Error('Некорректные ошибки.');
       candidate.error = '';
     }
+    syncItemCopy(candidate);
     updated.set(change.uid, candidate);
   }
   let nextItems = context.items.map(item => updated.get(item.uid));
@@ -3162,14 +3310,16 @@ async function configureItem({ index, variant, values, error, live }, confirm, r
   const item = prepared?.items?.[index];
   if (!item || index !== prepared.index || !Number.isInteger(variant) || !item.variants[variant]) throw new Error('Компонент или вариант недоступен.');
   if (variant !== item.variant) {
-    const compatible = new Map(editableProperties(item.variants[variant]));
-    const priorValues = Object.entries(values || item.values || {});
-    item.variant = variant;
-    item.values = Object.fromEntries(priorValues.filter(([key, value]) =>
-      compatible.get(key)?.type === (typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT')));
-    values = undefined;
-    if (typeof error === 'string') item.error = error.trim().slice(0, 3000);
-    item.fillKeys = undefined;
+    const priorFields=editableProperties(item.variants[item.variant]);
+    await ensureComponentLabel(item.variants[variant]);
+    const nextFields=editableProperties(item.variants[variant]);
+    const prior={...item,values:{...item.values,...values}};
+    syncItemCopy(prior);
+    item.text=prior.text;item.value=prior.value;item.placeholder=prior.placeholder;
+    item.values=mapVariantCopyValues(prior.values,priorFields,nextFields);
+    item.variant=variant;item.texts=undefined;item.fillKeys=undefined;
+    values=undefined;
+    if(typeof error==='string')item.error=error.trim().slice(0,3000);
   }
   item.confirmed = false;
   if (confirm || values) {
@@ -3181,6 +3331,7 @@ async function configureItem({ index, variant, values, error, live }, confirm, r
     })) throw new Error('Проверьте свойства компонента.');
     item.values = { ...item.values, ...values };
     if (prepared.stage === 'copy' && typeof error === 'string') item.error = error.trim().slice(0, 3000);
+    syncItemCopy(item);
     item.confirmed = confirm;
   }
   if (confirm) {
