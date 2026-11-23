@@ -155,10 +155,10 @@ test('all 137 Storybook sections have sources and unique names; allowed catalog 
   const knowledge=JSON.parse(prompt.split('\n').at(-1)).triplexKnowledge;
   assert.equal(knowledge.components.length,133);
 });
-test('knowledge reaches initial selection, conversation, copy and states requests', () => {
+test('full knowledge reaches initial selection and structural conversation', () => {
   const {run,messages}=backend();
   run(`prepared={catalog:formCatalog([{key:'n',type:'COMPONENT',name:'NumberField'},{key:'a',type:'COMPONENT',name:'AmountField'}])}`);
-  for (const type of ['prepared','dialogRequest','copyRequest','flowRequest']) {
+  for (const type of ['prepared','dialogRequest']) {
     run(`send('${type}',{prompt:'Количество ЦФА и сумма инвестиции'})`);
     assert.match(messages.at(-1).prompt,/Ввод целого или дробного числа/);
     assert.match(messages.at(-1).prompt,/Ввод денежной суммы/);
@@ -533,4 +533,117 @@ test('mixed edits are passed to model with distinction between label and type',a
   assert.match(app.messages.at(-1).prompt,/Удаление Amount не означает удаление Text/);
   await app.run(`requestConversation({revision:'Замени SelectField на SuggestField и убери Island'})`);
   assert.equal(app.run('prepared.items.length'),7);
+});
+
+test('copy request includes only current component documentation; full catalog remains available for replacements',()=>{
+  const {run,messages}=backend();
+  run(`prepared={catalog:formCatalog(triplexKnowledge.components.map((d,i)=>({key:String(i),type:'COMPONENT',name:d.name}))),items:[],index:0};prepared.items=[{id:prepared.catalog.findIndex(d=>d.knowledgeName==='NumberField')+1}];`);
+  run(`send('prepared',{prompt:'Выбор компонентов'})`);const full=messages.at(-1).prompt.length;
+  run(`send('copyRequest',{prompt:'Настрой количество ЦФА'})`);
+  const scoped=messages.at(-1);
+  const docs=JSON.parse(scoped.prompt.split('\n').at(-1)).triplexKnowledge.components;
+  assert.deepEqual(docs.map(d=>d.name),['NumberField']);
+  assert.ok(scoped.prompt.length<full*0.15);
+  assert.equal(scoped.requestMetrics.documentedTypes,1);
+  run(`send('dialogRequest',{prompt:'Замени компонент'})`);
+  assert.equal(messages.at(-1).requestMetrics.documentedTypes,133);
+});
+test('state request uses actual frame components, including legacy component-set names',()=>{
+  const fields=[
+    {type:'INSTANCE',name:'Сумма',getPluginData:key=>key==='triplex-field-id'?'1':key==='triplex-component-name'?'Amount Field (R) / Amount Field':''},
+    {type:'INSTANCE',name:'Количество',mainComponent:{name:'Default',parent:{type:'COMPONENT_SET',name:'NumberField'}},getPluginData:key=>key==='triplex-field-id'?'2':''}
+  ];
+  const {run,messages}=backend({getNodeById:()=>({type:'FRAME',children:fields})});
+  run(`approvedSource={frameId:'frame'};activeLibraryAssets=triplexKnowledge.components.map((d,i)=>({key:String(i),type:'COMPONENT',name:d.name}));send('flowRequest',{prompt:'Состояния'})`);
+  const docs=JSON.parse(messages.at(-1).prompt.split('\n').at(-1)).triplexKnowledge.components;
+  assert.deepEqual(docs.map(d=>d.name).sort(),['AmountField','NumberField']);
+  assert.equal(messages.at(-1).requestMetrics.scope,'states');
+});
+test('compact model history preserves all user constraints, recent turns and stored transcript',()=>{
+  const {run}=backend();
+  run(`conversation=[{role:'user',text:'Задача'},{role:'user',text:'Не использовать маски'}];for(let i=0;i<30;i++)conversation.push({role:i%2?'user':'assistant',text:i%2?'Правило '+i:'Старый ответ '.repeat(400)});`);
+  const original=run('JSON.stringify(conversation)');
+  const compact=run(`modelConversation('Задача')`);
+  assert.equal(compact.earlierUserInstructions.includes('Не использовать маски'),true);
+  assert.equal(compact.recent.length,6);
+  for(const message of JSON.parse(original).filter(m=>m.role==='user' && m.text!=='Задача')) {
+    assert.ok(compact.earlierUserInstructions.includes(message.text)||compact.recent.some(m=>m.text===message.text));
+  }
+  assert.equal(run('JSON.stringify(conversation)'),original);
+  assert.ok(JSON.stringify(compact).length<original.length*0.3);
+});
+test('UI measures request size and elapsed time without exposing prompt in metrics',async()=>{
+  const {ctx,get}=ui();
+  ctx.AbortController=AbortController;
+  ctx.fetch=async()=>({ok:true,json:async()=>({result:'{"items":[]}',metrics:{elapsedMs:1400}})});
+  const result=await vm.runInContext(`requestModel('Описание платежа')`,ctx);
+  assert.equal(result,'{"items":[]}');
+  assert.match(get('modelMetrics').textContent,/символов.*ответ за.*CLI 1.4 с/);
+  assert.ok(!get('modelMetrics').textContent.includes('Описание платежа'));
+});
+function statePreviewFixture() {
+  const made=[];
+  function field(){return {type:'INSTANCE',name:'Количество',width:240,height:48,
+    mainComponent:{name:'Default'},componentProperties:{'Label#1':{type:'TEXT',value:'Количество ЦФА'},'Value#1':{type:'TEXT',value:'10'},'Error#1':{type:'TEXT',value:''},'ShowError#1':{type:'BOOLEAN',value:false}},
+    getPluginData:key=>({'triplex-field-id':'1','triplex-field-label':'Количество','triplex-component-name':'NumberField'}[key]||''),
+    setProperties(values){for(const [key,value] of Object.entries(values))this.componentProperties[key].value=value;},resizeWithoutConstraints(w,h){this.width=w;this.height=h;}};}
+  const source={id:'source',type:'FRAME',parent:{id:'page'},width:500,height:400,x:0,y:0,children:[field()],
+    clone(){const copy={...this,children:[field()],setPluginData(){},resizeWithoutConstraints(){},async exportAsync(){return new Uint8Array([1,2,3]);},remove(){this.removed=true;}};made.push(copy);return copy;}};
+  const app=backend({currentPage:{id:'page'},getNodeById:()=>source});
+  app.run(`approvedSource={frameId:'source',task:'Ввод количества ЦФА, вывод суммы без ввода',components:[{uid:1,name:'NumberField',text:'Количество ЦФА',value:'10',readOnly:false}],signature:layoutSignature(pixso.getNodeById('source'))};
+    flow={states:[{name:'Пустое количество',condition:'Попытка отправки',values:{'1':''},errors:[{field:'1',text:'Введите количество'}]}]};`);
+  return {...app,made,source};
+}
+test('state context includes confirmed type, original task, actual properties and user decisions',()=>{
+  const app=statePreviewFixture();
+  app.run(`requestFlow({requirements:'Форма ЦФА',feedback:'',standard:''})`);
+  const prompt=app.messages.at(-1).prompt;
+  assert.match(prompt,/confirmedTask/);
+  assert.match(prompt,/Ввод количества ЦФА, вывод суммы без ввода/);
+  assert.match(prompt,/"component":"NumberField"/);
+  assert.match(prompt,/"label":"Количество ЦФА"/);
+  assert.match(prompt,/"confirmed":/);
+  assert.match(prompt,/"Value#1"/);
+});
+test('preview uses edited error text on a temporary clone and always removes it',async()=>{
+  const app=statePreviewFixture();
+  app.run(`const draft={sourceKey:flowStateKey(flow.states[0]),name:'Проверка количества',condition:'Нажали продолжить',values:{'1':''},errorTexts:['Укажите количество ЦФА']};`);
+  await app.run(`previewFlowState({index:0,edits:[draft],selection:[{included:true,errors:[true]}],previewId:9})`);
+  assert.equal(app.messages.at(-1).type,'flowPreview');
+  assert.equal(app.messages.at(-1).previewId,9);
+  assert.equal(app.made[0].children[0].componentProperties['Error#1'].value,'Укажите количество ЦФА');
+  assert.equal(app.made[0].children[0].componentProperties['ShowError#1'].value,true);
+  assert.equal(app.made[0].removed,true);
+  assert.equal(app.source.children[0].componentProperties['Error#1'].value,'');
+  assert.equal(app.run('flow.states[0].errors[0].text'),'Введите количество');
+});
+test('edited texts are used by approval and cannot change field references',async()=>{
+  const app=statePreviewFixture();
+  app.run(`const draft={sourceKey:flowStateKey(flow.states[0]),name:'Название',condition:'Условие',values:{'1':''},errorTexts:['Мой текст']};`);
+  await app.run(`handleCommand({type:'approveFlow',edits:[draft],selection:[{included:true,errors:[true]}]})`);
+  assert.equal(app.run('flow.selected[0].errors[0].text'),'Мой текст');
+  assert.throws(()=>app.run(`editedFlowStates([{...draft,values:{'unknown':'100'}}])`),/Заполните/);
+  assert.throws(()=>app.run(`editedFlowStates([{...draft,sourceKey:'old'}])`),/другому предложению/);
+});
+test('preview export failure removes temporary clone and reports an error',async()=>{
+  const app=statePreviewFixture();
+  const clone=app.source.clone.bind(app.source);
+  app.source.clone=()=>{const copy=clone();copy.exportAsync=async()=>{throw Error('export unavailable');};return copy;};
+  await app.run(`previewFlowState({index:0,selection:[{included:true,errors:[true]}],previewId:1})`);
+  assert.match(app.messages.at(-1).error,/export unavailable/);
+  assert.equal(app.made[0].removed,true);
+});
+test('state cards expose editable copy and saved edits restore',async()=>{
+  const {get,receive,ctx}=ui();
+  const state={name:'Ошибка',condition:'Нет значения',values:{'1':''},errors:[{field:'1',text:'Введите количество'}]};
+  await receive({type:'flowProposal',reply:'Предложения',states:[state],labels:{'1':'Количество'}});
+  const card=get('flowChoices').children[0];
+  const content=card.children[1].children[0];
+  const errorLabel=content.children.find(node=>node.textContent==='Текст ошибки · Количество');
+  const input=errorLabel.children[0];input.value='Укажите число';input.oninput();
+  assert.equal(vm.runInContext('flowEdits[0].errorTexts[0]',ctx),'Укажите число');
+  assert.equal(vm.runInContext('flowApproved',ctx),false);
+  const edits=vm.runInContext('flowEdits',ctx);
+  await receive({type:'sessionRestored',sessionId:'saved',stage:'done',formPlaced:true,hasSource:true,layoutLocked:true,flow:{states:[state]},labels:{'1':'Количество'},ui:{hasFlowResponse:true,hasFlowDraft:true,flowEdits:edits}});
+  assert.equal(vm.runInContext('flowEdits[0].errorTexts[0]',ctx),'Укажите число');
 });

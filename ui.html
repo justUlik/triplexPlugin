@@ -29,6 +29,13 @@
   .message p { margin: 8px 0; }
   .message ul { margin: 8px 0; padding-left: 22px; }
   .remove-component { float: right; margin-left: 12px; color: #a22222; font-size: 18px; line-height: 1; }
+  .state-card { padding: 16px; margin: 16px 0; border: 1px solid #d5e0da; border-radius: 12px; background: white; }
+  .state-card h3 { margin: 0 0 12px; font-size: 16px; }
+  .state-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 20px; }
+  .state-preview { padding: 12px; background: #f5f8f6; border-radius: 8px; }
+  .state-preview img { display:block; max-width:100%; max-height:420px; object-fit:contain; margin-top:12px; }
+  .state-preview p { white-space:pre-wrap; }
+  @media(max-width:600px) { .state-grid { grid-template-columns: 1fr; } }
   .component-name { display: block; margin-top: 4px; overflow-wrap: anywhere; }
   #status.error { color: #a22222; }
 </style>
@@ -51,7 +58,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.3</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.5</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -69,6 +76,7 @@
 
 </section>
 
+<p id="modelMetrics" class="hint" role="status" hidden></p>
 <p id="catalogInfo" class="hint" hidden></p>
 <p id="status" role="status" aria-live="polite">Интерфейс загружается…</p>
 <section id="plan" hidden>
@@ -138,7 +146,7 @@ function saveSessionUI() {
   if (replayingHistory || historyReadOnly) return;
   post('saveSessionUI', { ui: { task:$('task').value, standard:$('standard').value, feedback:$('feedback').value,
     revision:$('revision').value, size:selectedSize(), transcript, hasFlowDraft, hasFlowResponse,
-    flowDecisions:[...flowDecisions], draft:stage==='copy' ? readDraft?.() : undefined } });
+    flowDecisions:[...flowDecisions], flowEdits, draft:stage==='copy' ? readDraft?.() : undefined } });
 }
 function renderHistory(sessions) {
   $('historyList').replaceChildren();
@@ -174,7 +182,7 @@ function restoreHistoryUI(message) {
     stage=message.stage||'list';componentCount=message.items?.length||0;
     for(const record of saved.transcript||[]) {addMessage(record.chat,record.author,record.text);transcript.push(record);}
     for(const pair of saved.flowDecisions||[]) flowDecisions.set(pair[0],pair[1]);
-    if(message.flow?.states) renderFlowChoices(message.flow.states);
+    if(message.flow?.states) renderFlowChoices(message.flow.states,message.labels,saved.flowEdits);
     hasFlowResponse=saved.hasFlowResponse===true || Boolean(message.flow);
     hasFlowDraft=saved.hasFlowDraft===true && Boolean(message.flow?.states?.length);
     $('formSetup').hidden=!formPlaced;
@@ -220,7 +228,7 @@ function setBusy(value) {
   $('lockLayout').hidden = layoutLocked;
   $('unlockLayout').hidden = !layoutLocked;
   $('scenario').hidden = stage !== 'done' || !layoutLocked;
-  $('flowChoices').querySelectorAll('button').forEach(button => { button.disabled = value; });
+  $('flowChoices').querySelectorAll('button,input,textarea').forEach(button => { button.disabled = value; });
   $('retry').hidden = !lastRequest;
   $('retry').disabled = value;
   $('startForm').hidden = componentCount > 0;
@@ -241,7 +249,7 @@ function setBusy(value) {
   if(historyReadOnly) {
     for(const id of ['prepare','place','revise','openProperties','apply','lockLayout','unlockLayout','flowSend','approveFlow','createStates','keepCurrent']) $(id).disabled=true;
     $('items').querySelectorAll('input,select,textarea,button').forEach(control=>{control.disabled=true;});
-    $('flowChoices').querySelectorAll('button').forEach(control=>{control.disabled=true;});
+    $('flowChoices').querySelectorAll('button,input,textarea').forEach(control=>{control.disabled=true;});
     for(const id of ['task','standard','revision','feedback']) $(id).disabled=true;
   }
 }
@@ -451,7 +459,7 @@ for (const id of ['task', 'standard', 'feedback']) {
 $('approveFlow').onclick = () => {
   if (busy || !hasFlowDraft) return;
   setBusy(true);
-  post('approveFlow', { selection: flowSelection });
+  post('approveFlow', { selection: flowSelection, edits:flowEdits });
 };
 
 $('flowSend').onclick = () => {
@@ -468,10 +476,12 @@ $('flowSend').onclick = () => {
   setBusy(true);
   status(hasFlowResponse ? 'GigaCode дополняет состояния и ошибки…' : 'GigaCode предлагает состояния и ошибки…');
   saveSessionUI();
-  post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback, selection: flowSelection });
+  post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback, selection: flowSelection, edits:flowEdits });
 };
 
 function clearFlow() {
+  disposeFlowPreviews();
+  flowEdits=[];
   hasFlowResponse = false;
   flowApproved = false;
   hasFlowDraft = false;
@@ -486,54 +496,93 @@ function clearFlow() {
 $('lockLayout').onclick = () => { if (!busy) { setBusy(true); post('lockLayout'); } };
 $('unlockLayout').onclick = () => { if (!busy) { setBusy(true); post('unlockLayout'); } };
 
-function renderFlowChoices(states, labels = {}) {
+let flowEdits = [];
+const flowPreviewViews = new Map();
+let flowPreviewSequence = 0;
+function disposeFlowPreviews() {
+  for(const view of flowPreviewViews.values()) if(view.url) URL.revokeObjectURL(view.url);
+  flowPreviewViews.clear();
+}
+function renderFlowChoices(states, labels = {}, savedEdits = flowEdits) {
+  disposeFlowPreviews();
   flowStates = states;
   const stateKey = state => JSON.stringify([state.name, state.condition]);
+  const sourceKey = state => JSON.stringify([state.name,state.condition,state.errors]);
   const errorKey = error => JSON.stringify([error.field, error.text]);
+  const previous = new Map((savedEdits||[]).map(edit=>[edit.sourceKey,edit]));
+  flowEdits = states.map(state=>previous.get(sourceKey(state)) || {sourceKey:sourceKey(state),name:state.name,condition:state.condition,values:{...state.values},errorTexts:state.errors.map(error=>error.text)});
   flowSelection = states.map(state => ({ included: flowDecisions.get(stateKey(state)) ?? true,
     errors: state.errors.map(error => flowDecisions.get(errorKey(error)) ?? true) }));
   $('flowChoices').replaceChildren();
   states.forEach((state, i) => {
-    const card = document.createElement('fieldset');
-    const legend = document.createElement('legend');
-    legend.textContent = state.name;
-    const description = document.createElement('p');
-    description.textContent = state.condition;
-    card.append(legend, description);
-    function toggle(parent, key, read, write, title) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      const refresh = () => {
-        button.textContent = read() ? '+ Берём' : '− Не берём';
-        button.setAttribute('aria-pressed', String(read()));
-        button.setAttribute('aria-label', title + ': ' + button.textContent);
-      };
-      button.onclick = () => {
-        write(!read());
-        flowDecisions.set(key, read());
-        flowApproved = false;
-        post('invalidateFlow');
-        refresh();
-        setBusy(false);
-        saveSessionUI();
-      };
-      refresh();
-      parent.appendChild(button);
+    const edit=flowEdits[i];
+    const card=document.createElement('section');card.className='state-card';
+    const heading=document.createElement('h3');heading.textContent=(i+1)+'. '+edit.name;
+    card.appendChild(heading);
+    const grid=document.createElement('div');grid.className='state-grid';
+    const content=document.createElement('div');
+    const preview=document.createElement('div');preview.className='state-preview';
+    const previewText=document.createElement('p');previewText.className='hint';previewText.textContent='Превью на основе закреплённого фрейма';
+    const previewButton=document.createElement('button');previewButton.type='button';previewButton.textContent='Показать превью';
+    const imageArea=document.createElement('div');
+    preview.append(previewText,previewButton,imageArea);grid.append(content,preview);card.appendChild(grid);
+    const view={area:imageArea,note:previewText,button:previewButton,token:0};flowPreviewViews.set(i,view);
+    function changed() {
+      flowApproved=false;
+      view.token=++flowPreviewSequence;
+      if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
+      imageArea.replaceChildren();previewText.textContent='Тексты или выбор изменены. Обновите превью.';
+      previewButton.textContent='Обновить превью';
+      post('invalidateFlow');saveSessionUI();setBusy(false);
     }
-    toggle(card, stateKey(state), () => flowSelection[i].included, value => { flowSelection[i].included = value; }, state.name);
-    for (const [j, error] of state.errors.entries()) {
-      const row = document.createElement('p');
-      row.append((labels[error.field] || 'Форма') + ' — ' + error.text + ' ');
-      toggle(row, errorKey(error), () => flowSelection[i].errors[j], value => { flowSelection[i].errors[j] = value; }, error.text);
-      card.appendChild(row);
+    function editable(title,value,write,multiline=false) {
+      const label=document.createElement('label');label.textContent=title;
+      const input=document.createElement(multiline?'textarea':'input');input.value=value;input.maxLength=3000;
+      input.oninput=()=>{write(input.value);changed();};label.appendChild(input);content.appendChild(label);
     }
-    const details = document.createElement('p');
-    details.className = 'hint';
-    details.textContent = [Object.entries(state.values).map(([id, value]) => (labels[id] || id) + ': ' + value).join(' · '), ...(state.variants || []).map(v => v.variant)].filter(Boolean).join(' · ');
-    card.appendChild(details);
+    function toggle(parent,key,read,write,title) {
+      const button=document.createElement('button');button.type='button';
+      const refresh=()=>{button.textContent=read()?'+ Берём':'− Не берём';button.setAttribute('aria-pressed',String(read()));button.setAttribute('aria-label',title+': '+button.textContent);};
+      button.onclick=()=>{write(!read());flowDecisions.set(key,read());refresh();changed();};refresh();parent.appendChild(button);
+    }
+    toggle(content,stateKey(state),()=>flowSelection[i].included,value=>{flowSelection[i].included=value;},state.name);
+    editable('Название состояния',edit.name,value=>{edit.name=value;heading.textContent=(i+1)+'. '+value;});
+    editable('Когда показать',edit.condition,value=>{edit.condition=value;},true);
+    const summary=document.createElement('p');summary.className='hint';
+    const affected=[...new Set([...Object.keys(state.values),...(state.variants||[]).map(v=>v.field),...state.errors.map(error=>error.field)])];
+    summary.textContent='Что добавим: копию экрана с изменениями для '+(affected.length?affected.map(id=>labels[id]||id||'формы').join(', '):'состояния формы')+'. Остальная компоновка сохранится.';content.appendChild(summary);
+    for(const [id,value] of Object.entries(edit.values)) editable('Значение · '+(labels[id]||id)+' (можно оставить пустым)',value,text=>{edit.values[id]=text;});
+    state.errors.forEach((error,j)=>{
+      editable('Текст ошибки · '+(labels[error.field]||error.field||'Форма'),edit.errorTexts[j],text=>{edit.errorTexts[j]=text;},true);
+      toggle(content,errorKey(error),()=>flowSelection[i].errors[j],value=>{flowSelection[i].errors[j]=value;},error.text);
+    });
+    if(state.variants?.length) {
+      const details=document.createElement('details');const title=document.createElement('summary');title.textContent='Варианты компонентов';details.appendChild(title);
+      for(const variant of state.variants){const p=document.createElement('p');p.className='hint';p.textContent=(labels[variant.field]||variant.field)+' → '+variant.variant;details.appendChild(p);}content.appendChild(details);
+    }
+    previewButton.onclick=()=>{
+      if(busy||historyReadOnly)return;
+      if(!flowSelection[i].included){previewText.textContent='Состояние исключено. Включите его для превью.';return;}
+      view.token=++flowPreviewSequence;previewText.textContent='Готовлю превью в Pixso…';
+      post('previewFlowState',{index:i,previewId:view.token,edits:flowEdits,selection:flowSelection});
+    };
     $('flowChoices').appendChild(card);
   });
 }
+function showFlowPreview(message) {
+  const view=flowPreviewViews.get(message.index);
+  if(!view||view.token!==message.previewId)return;
+  if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
+  view.area.replaceChildren();
+  if(message.error){view.note.textContent='Превью недоступно: '+message.error;return;}
+  const img=document.createElement('img');img.alt='Превью состояния '+flowEdits[message.index].name;
+  view.url=URL.createObjectURL(new Blob([new Uint8Array(message.png)],{type:'image/png'}));img.src=view.url;view.area.appendChild(img);
+  const notes=document.createElement('p');notes.className='hint';notes.textContent='Подпись под фреймом:\n'+(message.annotations||[]).join('\n');view.area.appendChild(notes);
+  view.note.textContent=message.errorsPending?'У '+message.errorsPending+' ошибок нет текстового свойства в компоненте: текст будет в подписи под фреймом.':'Превью с выбранными состояниями и вашими текстами.';
+  if(message.skipped)view.note.textContent+=' Не удалось заполнить значений: '+message.skipped+'.';
+  view.button.textContent='Обновить превью';
+}
+
 
 $('createStates').onclick = () => {
   if (busy) return;
@@ -548,10 +597,22 @@ $('apply').onclick = () => {
   post('apply');
 };
 
+let modelRequestNumber = 0;
 async function requestModel(prompt) {
   if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('Плагин сформировал пустой запрос.');
   if (prompt.length > 48000) throw new Error('Контекст диалога превышает лимит моста: ' + prompt.length + ' из 48000 символов. Запрос не отправлен.');
   let response;
+  const requestNumber=++modelRequestNumber;
+  const startedAt=Date.now();
+  let progressTimer;
+  let finished=false;
+  const metrics=$('modelMetrics');
+  metrics.hidden=false;
+  const progress=()=>{
+    metrics.textContent='Запрос №'+requestNumber+' · '+prompt.length.toLocaleString('ru-RU')+' символов · ожидание '+Math.floor((Date.now()-startedAt)/1000)+' с';
+    progressTimer=setTimeout(progress,1000);
+  };
+  progress();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 100000);
   try {
@@ -564,11 +625,16 @@ async function requestModel(prompt) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Ошибка GigaCode CLI.');
+    metrics.textContent='Запрос №'+requestNumber+' · '+prompt.length.toLocaleString('ru-RU')+' символов · ответ за '+((Date.now()-startedAt)/1000).toFixed(1)+' с'+(typeof data.metrics?.elapsedMs==='number'?' · CLI '+(data.metrics.elapsedMs/1000).toFixed(1)+' с':'');
+    finished=true;
     return data.result;
   } catch (error) {
     if (error.name === 'AbortError') throw new Error('Ответ не получен за 100 секунд. Нажмите «Повторить отправку».');
     throw new Error(error.message || 'Не удалось подключиться. Проверьте, что мост GigaCode запущен на этом компьютере и Pixso разрешён доступ к нему.');
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);clearTimeout(progressTimer);
+    if(!finished) metrics.textContent='Запрос №'+requestNumber+' · '+prompt.length.toLocaleString('ru-RU')+' символов · завершён с ошибкой через '+((Date.now()-startedAt)/1000).toFixed(1)+' с';
+  }
 }
 
 $('openProperties').onclick = () => {
@@ -742,6 +808,9 @@ window.addEventListener('message', async event => {
         finishPending(error.message);
       }
       break;
+    case 'flowPreview':
+      showFlowPreview(message);
+      return;
     case 'flowProposal':
       hasFlowResponse = true;
       $('feedback').value = '';
@@ -894,6 +963,7 @@ window.addEventListener('message', async event => {
   }
   setBusy(false);
   saveSessionUI();
+  if(message.type==='flowProposal' && flowPreviewViews.has(0)) flowPreviewViews.get(0).button.onclick();
   } catch (error) {
     clearTimeout(imageTimer);
     if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });

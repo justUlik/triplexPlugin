@@ -130,11 +130,15 @@ const server = createServer(async (request, response) => {
     return;
   }
   running = true;
-  console.log('[Pixso] Запрос получен, запускаю GigaCode CLI.');
+  const startedAt=Date.now();
+  console.log('[Pixso] Запускаю GigaCode CLI · '+prompt.length+' символов.');
   try {
-    reply(response, 200, { result: await runGigaCode(prompt) });
+    const result=await runGigaCode(prompt);
+    const elapsedMs=Date.now()-startedAt;
+    console.log('[Pixso] Ответ CLI · '+elapsedMs+' мс · '+result.length+' символов.');
+    reply(response, 200, { result, metrics:{elapsedMs,promptCharacters:prompt.length,resultCharacters:result.length} });
   } catch (error) {
-    console.error('[Pixso] ' + error.message);
+    console.error('[Pixso] Ошибка через '+(Date.now()-startedAt)+' мс · ' + error.message);
     reply(response, 502, { error: error.message });
   } finally {
     running = false;

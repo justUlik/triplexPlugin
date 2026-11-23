@@ -1144,12 +1144,48 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.3' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.5' });
+
+function modelConversation(task = prepared?.task) {
+  // The saved transcript is untouched. Older assistant prose repeats plans and
+  // is superseded by currentItems/components; keep all older user instructions.
+  const boundary = Math.max(0, conversation.length - 6);
+  const seen = new Set(task ? [task.trim()] : []);
+  const earlierUserInstructions = [];
+  for (const message of conversation.slice(0,boundary)) {
+    if (message.role !== 'user' || typeof message.text !== 'string') continue;
+    const text = message.text.trim();
+    if (text && !seen.has(text)) { earlierUserInstructions.push(text);seen.add(text); }
+  }
+  return { earlierUserInstructions, recent:conversation.slice(boundary),
+    rule:'Актуальный состав и настройки заданы в components/currentItems. Старые ответы модели не являются текущим набором. Последние просьбы уточняют ранние.' };
+}
+
+function requestKnowledgeCatalog(type, catalog) {
+  if (type === 'copyRequest') {
+    const item=prepared?.items?.[prepared.index];
+    return item ? catalog.filter((_,index)=>index+1===item.id) : [];
+  }
+  if (type === 'flowRequest') {
+    const frame=approvedSource?.frameId && pixso.getNodeById(approvedSource.frameId);
+    if (!frame || frame.removed) return [];
+    return sourceFields(frame).map(node=>{
+      const component=node.mainComponent;
+      const names=[node.getPluginData('triplex-component-name'),component?.parent?.type==='COMPONENT_SET' ? component.parent.name : '',component?.name,node.name].filter(Boolean);
+      const doc=names.map(name=>componentKnowledge({name})).find(Boolean);
+      return {name:names[0] || '',knowledgeName:doc?.name || null};
+    });
+  }
+  return catalog;
+}
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {
     const catalog = prepared?.catalog || formCatalog(activeLibraryAssets || []);
-    data = { ...data, prompt: withTriplexKnowledge(data.prompt, catalog), catalogInfo: catalogInfo(catalog) };
+    const scopedCatalog=requestKnowledgeCatalog(type,catalog);
+    const scope=type==='copyRequest'?'copy':type==='flowRequest'?'states':'catalog';
+    const prompt=withTriplexKnowledge(data.prompt,scopedCatalog,scope);
+    data = { ...data, prompt, catalogInfo:catalogInfo(catalog), requestMetrics:{characters:prompt.length,scope,documentedTypes:new Set(scopedCatalog.map(item=>item.knowledgeName).filter(Boolean)).size} };
   }
   pixso.ui.postMessage({ type, ...data });
 }
@@ -1202,8 +1238,8 @@ function catalogInfo(catalog) {
   return `Каталог Pixso: ${catalog.length} компонентов; назначение сопоставлено: ${known}; требует уточнения: ${catalog.length - known}. Кнопки исключены.`;
 }
 
-function withTriplexKnowledge(prompt, catalog) {
-  const rules = [
+function withTriplexKnowledge(prompt, catalog, scope = 'catalog') {
+  const rules = scope === 'catalog' ? [
     'СПРАВОЧНИК TRIPLEX. Это знания о назначении компонентов, а не список доступных экземпляров.',
     'Доступны для вставки ТОЛЬКО id из каталога Pixso. doc связывает экземпляр со справочником; doc:null означает неподтвержденное назначение. Не выдумывай id и не считай неизвестный компонент TextField.',
     'Рассматривай весь каталог: поля, отображение данных, таблицы, списки, карточки, загрузку файлов, навигацию и структуру. Сначала определи смысл задачи, затем выбирай компонент. Не ограничивайся полями ввода.',
@@ -1213,6 +1249,11 @@ function withTriplexKnowledge(prompt, catalog) {
     'React props из документации не равны свойствам Pixso. Настраивать можно только переданные fields/variants. Контейнеры не получают вложенный контент автоматически; поясни ручную компоновку. Не вставляй повторно уже установленный LightBox/BodyPage.',
     'Кнопки запрещены; не обходи запрет через Link/CardAction/Chip для той же кнопочной задачи. Не предлагай дополнительные состояния и ошибки до этапа закрепленной верстки.',
     'В reply кратко объясни выбранные типы и недоступные возможности. Для doc:null признай нехватку сведений и задай вопрос, а не приписывай компоненту выдуманное назначение.'
+  ].join('\n') : [
+    'СПРАВОЧНИК TRIPLEX для выбранных компонентов. Состав уже согласован; не подбирай новые компоненты.',
+    'Используй только переданные свойства и варианты Pixso, не выдумывай React props. Если возможности нет, явно объясни ограничение.',
+    scope==='copy' ? 'Настрой только тексты текущего компонента. Ошибки и состояния будут согласованы после верстки.' : 'Предложи состояния только для компонентов закреплённого экрана. Не меняй их состав. Неподтвержденные бизнес-правила помечай как гипотезы.',
+    'Соблюдай текстовый стандарт и указания пользователя. Ответь только запрошенным JSON; пояснение краткое.'
   ].join('\n');
   const base = prompt + '\n' + rules;
   // Never silently cut actual Pixso IDs or conversation to make room for documentation.
@@ -1258,7 +1299,55 @@ function lockedSource() {
   return source;
 }
 
-function requestFlow({ requirements, feedback, standard, selection }) {
+function confirmedFlowFields(source) {
+  return sourceFields(source).map(node=>{
+    const id=node.getPluginData('triplex-field-id');
+    const approved=approvedSource?.components?.find(item=>String(item.uid)===id);
+    const name=node.getPluginData('triplex-component-name') || approved?.name || node.mainComponent?.parent?.name || node.name;
+    const label=Object.entries(node.componentProperties||{}).find(([key,prop])=>isLabel(key)&&prop.type==='TEXT')?.[1].value || node.getPluginData('triplex-field-label');
+    const doc=componentKnowledge({name});
+    return { field:id,label,component:name,purpose:doc?.use || 'Назначение не сопоставлено',
+      confirmed:approved ? {text:approved.text,value:approved.value,placeholder:approved.placeholder,readOnly:approved.readOnly,optionExample:approved.optionExample} : undefined,
+      width:node.width,height:node.height,properties:node.componentProperties,
+      currentVariant:node.mainComponent?.name,
+      variants:Array.from(node.mainComponent?.parent?.type==='COMPONENT_SET'?node.mainComponent.parent.children:[]).filter(n=>n.type==='COMPONENT').map(n=>n.name) };
+  });
+}
+function flowStateKey(state) { return JSON.stringify([state.name,state.condition,state.errors]); }
+function editedFlowStates(edits) {
+  if (edits===undefined) return flow.states;
+  if (!Array.isArray(edits) || edits.length!==flow.states.length) throw new Error('Предложения изменились. Откройте актуальный список состояний.');
+  return flow.states.map((state,i)=>{
+    const edit=edits[i];
+    if (!edit || edit.sourceKey!==flowStateKey(state)) throw new Error('Тексты относятся к другому предложению. Обновите список состояний.');
+    const valid=(value,allowEmpty=false)=>typeof value==='string' && value.length<=3000 && (allowEmpty||value.trim());
+    if (!valid(edit.name)||!valid(edit.condition)||!edit.values||Array.isArray(edit.values)||typeof edit.values!=='object'||
+      Object.keys(edit.values).length!==Object.keys(state.values).length || Object.entries(edit.values).some(([id,value])=>!Object.prototype.hasOwnProperty.call(state.values,id)||!valid(value,true)) ||
+      !Array.isArray(edit.errorTexts)||edit.errorTexts.length!==state.errors.length||edit.errorTexts.some(text=>!valid(text))) throw new Error('Заполните название, условие и тексты ошибок (до 3000 символов).');
+    return {...state,name:edit.name.trim(),condition:edit.condition.trim(),values:{...edit.values},errors:state.errors.map((error,j)=>({...error,text:edit.errorTexts[j].trim()}))};
+  });
+}
+
+async function previewFlowState({ index, edits, selection, previewId }) {
+  let copy;
+  try {
+    const source=lockedSource();
+    if (!flow?.states || !Number.isInteger(index)||!flow.states[index]) throw new Error('Состояние недоступно.');
+    const states=editedFlowStates(edits);
+    const isolated=selection.map((choice,i)=>({...choice,included:i===index&&choice.included}));
+    const state=selectFlow(isolated,states)[0];
+    if (!state) throw new Error('Состояние исключено. Включите его для превью.');
+    copy=source.clone();copy.locked=false;copy.x=source.x+source.width+48;copy.y=source.y;
+    const result=applyStateToCopy(copy,state,source);
+    if(typeof copy.exportAsync!=='function')throw new Error('Pixso не поддерживает экспорт превью.');
+    const png=await copy.exportAsync({format:'PNG'});
+    lockedSource();
+    send('flowPreview',{index,previewId,png:Array.from(png),annotations:result.annotations,errorsPending:result.errorsPending,skipped:result.skipped});
+  } catch(error) {send('flowPreview',{index,previewId,error:error.message});}
+  finally {if(copy&&!copy.removed)copy.remove();}
+}
+
+function requestFlow({ requirements, feedback, standard, selection, edits }) {
   const source = lockedSource();
   if (typeof requirements !== 'string' || !requirements.trim()) throw new Error('Вставьте бизнес-требования.');
   if (requirements.length > 12000 || typeof standard !== 'string' || standard.length > 8000 ||
@@ -1272,10 +1361,11 @@ function requestFlow({ requirements, feedback, standard, selection }) {
     'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
     'Верни только JSON: {"reply":"Объяснение","states":[{"name":"Название","condition":"Когда показать","values":{"field-id":"значение"},"variants":[{"field":"field-id","variant":"точное имя доступного варианта"}],"errors":[{"field":"field-id или пустая строка для формы","text":"Текст ошибки"}]}]}.',
     'Дай до 24 релевантных состояний. values, variants и errors могут быть пустыми. Используй только field из fields и варианты из variants. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
-    JSON.stringify({ ...context, fields: sourceFields(source).map(node => ({ field: node.getPluginData('triplex-field-id'),
-      label: node.getPluginData('triplex-field-label'), width: node.width, height: node.height,
-      properties: node.componentProperties, variants: Array.from(node.mainComponent?.parent?.type === 'COMPONENT_SET' ? node.mainComponent.parent.children : []).filter(n => n.type === 'COMPONENT').map(n => n.name) })),
-      previous: flow?.states, selection, feedback })
+    'fields — фактически подтверждённые компоненты с холста, их назначение, текущие свойства и доступные варианты. confirmedTask и decisions — исходная задача и решения пользователя. Следуй им; не возвращай удалённые или заменённые компоненты.',
+    'Не предлагай ввод для компонента отображения Amount/Text. Учитывай поведение компонента: не предлагай невозможные действия (например ввод букв, если поле их отфильтровывает). Не меняй размер или тему ради ошибки. Используй только точные варианты из fields.',
+    'В reply максимум два коротких предложения о предложениях. Не пересказывай устройство формы и каталог. Для каждого состояния дай понятные name и condition, конкретные values и точные тексты errors. Не делай выводов об отсутствии компонентов во всей дизайн-системе по ограниченной справке.',
+    JSON.stringify({ ...context, confirmedTask:approvedSource?.task || requirements, decisions:approvedSource?.decisions || modelConversation(), fields:confirmedFlowFields(source),
+      previous:flow ? editedFlowStates(edits) : undefined,selection,feedback })
   ].join('\n') });
 }
 
@@ -1293,12 +1383,12 @@ function reviewFlow({ raw }) {
           typeof error.text !== 'string' || !error.text.trim()))) throw new Error('GigaCode вернул некорректный план сценария.');
   flow = { ...pendingFlow, states: plan.states, reply: plan.reply };
   pendingFlow = null;
-  send('flowProposal', { reply: plan.reply, states: plan.states, labels: Object.fromEntries(sourceFields(source).map(node => [node.getPluginData('triplex-field-id'), node.getPluginData('triplex-field-label')])) });
+  send('flowProposal', { reply: plan.reply, states: plan.states, labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
 }
 
-function selectFlow(selection) {
-  if (!Array.isArray(selection) || selection.length !== flow.states.length) throw new Error('Проверьте выбор состояний.');
-  return flow.states.flatMap((state, i) => {
+function selectFlow(selection, states = flow.states) {
+  if (!Array.isArray(selection) || selection.length !== states.length) throw new Error('Проверьте выбор состояний.');
+  return states.flatMap((state, i) => {
     const choice = selection[i];
     if (typeof choice?.included !== 'boolean' || !Array.isArray(choice.errors) || choice.errors.length !== state.errors.length || choice.errors.some(v => typeof v !== 'boolean')) throw new Error('Проверьте выбор ошибок.');
     if (!choice.included) return [];
@@ -1308,6 +1398,45 @@ function selectFlow(selection) {
     const rejected = new Set(state.errors.filter((_, j) => !choice.errors[j]).map(e => e.field));
     return [{ ...state, errors, variants: (state.variants || []).filter(v => !rejected.has(v.field)) }];
   });
+}
+
+function applyStateToCopy(copy,state,source) {
+  let skipped=0;
+  let errorsPending=0;
+  const fields = new Map(sourceFields(copy).map(n => [n.getPluginData('triplex-field-id'), n]));
+  const sizes = [...fields.values()].map(n => [n, n.width, n.height]);
+  for (const choice of state.variants || []) {
+    const field = fields.get(choice.field);
+    const current = field?.mainComponent;
+    const variant = current?.parent?.type === 'COMPONENT_SET' && current.parent.children.find(n => n.type === 'COMPONENT' && n.name === choice.variant);
+    if (!variant || typeof field.swapComponent !== 'function') throw new Error('Недоступен вариант «' + choice.variant + '». Уточните состояние в чате.');
+    const values = field.componentProperties || {};
+    field.swapComponent(variant);
+    const compatible = Object.fromEntries(Object.entries(values).filter(([key, prop]) => ['TEXT', 'BOOLEAN'].includes(prop.type) && field.componentProperties?.[key]?.type === prop.type).map(([key, prop]) => [key, prop.value]));
+    if (Object.keys(compatible).length) field.setProperties(compatible);
+  }
+  for (const [id, value] of Object.entries(state.values)) {
+    const field = fields.get(id);
+    const key = Object.entries(field?.componentProperties || {}).find(([name, prop]) => /^(?:value|input[ _-]?value|значение)(?:#|$)/i.test(name) && prop.type === 'TEXT')?.[0];
+    if (key) field.setProperties({ [key]: value });
+    else skipped++;
+  }
+  const annotations = [state.condition];
+  for (const error of state.errors) {
+    const field = fields.get(error.field);
+    const props = Object.entries(field?.componentProperties || {});
+    const key = props.find(([name, prop]) => /error|validation|ошиб/i.test(name) && prop.type === 'TEXT')?.[0];
+    if (key) {
+      const values = { [key]: error.text };
+      for (const [name, prop] of props) if (prop.type === 'BOOLEAN' && /error|ошиб/i.test(name)) values[name] = true;
+      field.setProperties(values);
+    } else errorsPending++;
+    annotations.push((field?.getPluginData('triplex-field-label') || 'Форма') + ' — ' + error.text);
+  }
+  for (const [node, width, height] of sizes) node.resizeWithoutConstraints(width, height);
+  copy.resizeWithoutConstraints(source.width, source.height);
+  copy.setPluginData('triplex-flow-errors', JSON.stringify(state.errors));
+  return {skipped,errorsPending,annotations};
 }
 
 async function createStates() {
@@ -1325,39 +1454,9 @@ async function createStates() {
       copy.name = String(index + 2).padStart(2, '0') + ' · ' + state.name;
       copy.x = source.x + (index + 1) * (source.width + 48);
       copy.y = source.y;
-      const fields = new Map(sourceFields(copy).map(n => [n.getPluginData('triplex-field-id'), n]));
-      const sizes = [...fields.values()].map(n => [n, n.width, n.height]);
-      for (const choice of state.variants || []) {
-        const field = fields.get(choice.field);
-        const current = field?.mainComponent;
-        const variant = current?.parent?.type === 'COMPONENT_SET' && current.parent.children.find(n => n.type === 'COMPONENT' && n.name === choice.variant);
-        if (!variant || typeof field.swapComponent !== 'function') throw new Error('Недоступен вариант «' + choice.variant + '». Уточните состояние в чате.');
-        const values = field.componentProperties || {};
-        field.swapComponent(variant);
-        const compatible = Object.fromEntries(Object.entries(values).filter(([key, prop]) => ['TEXT', 'BOOLEAN'].includes(prop.type) && field.componentProperties?.[key]?.type === prop.type).map(([key, prop]) => [key, prop.value]));
-        if (Object.keys(compatible).length) field.setProperties(compatible);
-      }
-      for (const [id, value] of Object.entries(state.values)) {
-        const field = fields.get(id);
-        const key = Object.entries(field?.componentProperties || {}).find(([name, prop]) => /^(?:value|input[ _-]?value|значение)(?:#|$)/i.test(name) && prop.type === 'TEXT')?.[0];
-        if (key) field.setProperties({ [key]: value });
-        else skipped++;
-      }
-      const annotations = [state.condition];
-      for (const error of state.errors) {
-        const field = fields.get(error.field);
-        const props = Object.entries(field?.componentProperties || {});
-        const key = props.find(([name, prop]) => /error|validation|ошиб/i.test(name) && prop.type === 'TEXT')?.[0];
-        if (key) {
-          const values = { [key]: error.text };
-          for (const [name, prop] of props) if (prop.type === 'BOOLEAN' && /error|ошиб/i.test(name)) values[name] = true;
-          field.setProperties(values);
-        } else errorsPending++;
-        annotations.push((field?.getPluginData('triplex-field-label') || 'Форма') + ' — ' + error.text);
-      }
-      for (const [node, width, height] of sizes) node.resizeWithoutConstraints(width, height);
-      copy.resizeWithoutConstraints(source.width, source.height);
-      copy.setPluginData('triplex-flow-errors', JSON.stringify(state.errors));
+      const rendered=applyStateToCopy(copy,state,source);
+      skipped+=rendered.skipped; errorsPending+=rendered.errorsPending;
+      const annotations=rendered.annotations;
       await pixso.loadFontAsync({ family: 'Inter', style: 'Regular' });
       const note = pixso.createText();
       notes.push(note);
@@ -1415,7 +1514,7 @@ function sendPlanRequest(revision) {
     'Для поля только для чтения укажи readOnly: true. Для списка кошельков укажи в optionExample короткий вымышленный пример пункта с именем, ID и балансом.',
     'Если есть revision, отредактируй текущий список по этим правкам и верни весь новый список. Сохрани позиции, которые пользователь не просил менять.',
     JSON.stringify({
-      task, components, revision, conversation, requirements: flow?.requirements, textStandard: prepared.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
+      task, components, revision, conversation:modelConversation(task), requirements: flow?.requirements, textStandard: prepared.standard, states: flow?.states.map(({ name, condition }) => ({ name, condition })),
       currentItems: revision ? items.map(({ id, text, placeholder, value, readOnly, error, optionExample }) => ({ id, text, placeholder, value, readOnly, error, optionExample })) : undefined
     })
   ].join('\n');
@@ -1451,7 +1550,7 @@ function requestLabelRepair(message, error) {
     'Используй только uid,id,text,placeholder,value,readOnly,optionExample,values,variant. catalogId/componentId означают id типа. name/confirmed/reason — метаданные, их можно опустить. Для удаления исключи uid из итогового items. Не отменяй правки пользователя.',
     'У каждой новой строки items обязательны id и непустой text: видимая подпись до 120 символов. Не передавай объект вместо строки. Для существующей строки с uid можно пропустить text, тогда сохранится прежняя подпись.',
     dialog ? 'Верни JSON с action:list, reply и полным итоговым items с учётом последних правок пользователя. Для замены типа передай uid и новый id.' : 'Верни JSON с reply и полным items: [{id:1,text:"Подпись",placeholder:""}].',
-    JSON.stringify({ task: prepared.task, standard: prepared.standard, conversation,
+    JSON.stringify({ task: prepared.task, standard: prepared.standard, conversation:modelConversation(),
       catalog: modelCatalog(prepared.catalog), currentItems: prepared.items?.map(({uid,id,text}) => ({uid,id,text})),
       invalidResponse: typeof message.raw === 'string' ? message.raw.slice(0, 8000) : '' })
   ].join('\n');
@@ -1618,7 +1717,7 @@ async function requestConversation({ revision }) {
     'uid — уникальный номер уже добавленного поля из components. catalogId/id — тип из каталога. Несколько Text Field могут иметь один catalogId, но разные uid. Копируй uid из components, не используй порядковый номер или catalogId вместо него. Каждый uid в items встречается один раз. Для нового поля передавай только id без uid; для замены существующего — uid и новый id.',
     'При list можно также передать updates для существующих компонентов. Сохраняй все незатронутые решения. Если выполнить просьбу по доступным свойствам нельзя, объясни это в reply.',
     'Кнопки запрещены. Не предлагай ошибки и состояния до закрепления верстки. Выбирай специализированные компоненты по смыслу, не заменяй выбор, даты и переключатели TextField. По вопросу о TextField объясни выбор на основе переданного каталога.',
-    JSON.stringify({ conversation, task: prepared.task, standard: prepared.standard, stage: prepared.stage, components, variantsByCatalogId: definitions,
+    JSON.stringify({ conversation:modelConversation(), task: prepared.task, standard: prepared.standard, stage: prepared.stage, components, variantsByCatalogId: definitions,
       catalog: modelCatalog(prepared.catalog) })
   ].join('\n') });
 }
@@ -2304,6 +2403,7 @@ async function insert(parent, item) {
     await setInstanceValues(instance, item.values, item.name);
     instance.setPluginData('triplex-field-id', String(item.uid));
     instance.setPluginData('triplex-field-label', item.text);
+    instance.setPluginData('triplex-component-name', item.name);
     return instance;
   } catch (error) {
     if (!instance.removed) instance.remove();
@@ -2340,7 +2440,8 @@ async function apply() {
   }
   prepared = null;
   pixso.currentPage.selection = [body];
-  approvedSource = { frameId: frame.id, bodyId: body.id };
+  approvedSource = { frameId:frame.id,bodyId:body.id,task:context.task,standard:context.standard,
+    decisions:modelConversation(context.task),components:context.items.map(({uid,id,name,text,value,placeholder,readOnly,optionExample,values})=>({uid,id,name,text,value,placeholder,readOnly,optionExample,values})) };
   flow = null;
   pendingFlow = null;
   flowApproved = false;
@@ -2404,10 +2505,13 @@ async function handleCommand(message) {
       case 'approveFlow':
         if (pendingFlow || !flow?.states.length) throw new Error('Сначала получите список состояний для утверждения.');
         lockedSource();
-        flow.selected = selectFlow(message.selection);
+        flow.selected = selectFlow(message.selection,editedFlowStates(message.edits));
         if (!flow.selected.length) throw new Error('Выберите хотя бы одно состояние или ошибку.');
         flowApproved = true;
         send('flowApproved');
+        break;
+      case 'previewFlowState':
+        await previewFlowState(message);
         break;
       case 'createStates':
         await createStates();
@@ -2522,6 +2626,7 @@ function cleanSessionUI(value) {
     const values=Object.fromEntries(Object.entries(value.draft.values||{}).filter(([,v])=>typeof v==='string'||typeof v==='boolean'));
     result.draft={index:value.draft.index,variant:value.draft.variant,values};
   }
+  if(Array.isArray(value?.flowEdits)) result.flowEdits=JSON.parse(JSON.stringify(value.flowEdits));
   result.transcript = Array.isArray(value?.transcript) ? value.transcript.filter(m => ['componentChat','flowChat'].includes(m?.chat) && typeof m.author === 'string' && typeof m.text === 'string').map(({chat,author,text})=>({chat,author,text})) : [];
   return result;
 }
@@ -2602,6 +2707,7 @@ async function restoreSession(id) {
     stage: plan?.stage || (approvedSource?'done':'list'), hasSource:Boolean(approvedSource), formPlaced:Boolean(activeFormId),
     layoutLocked:Boolean(approvedSource?.signature), flowApproved, flow, revisionPending:plan?.revisionPending===true,
     items: !sessionReadOnly ? prepared?.items?.map(item=>describeItem(item)) || [] : (plan?.items || []).map(({name,text})=>({name,text})),
+    labels:activeFormId && pixso.getNodeById(activeFormId) ? Object.fromEntries(confirmedFlowFields(pixso.getNodeById(activeFormId)).map(field=>[field.field,field.label])) : {},
     index:plan?.index || 0 });
 }
 
@@ -2625,7 +2731,7 @@ async function handleMessage(message) {
     try { persistSession(); newSession(); } catch(error) { send('historyError',{message:error.message});return; }
   }
   await handleCommand(message);
-  if (!['renderPreview','cancelPreview','previewItem'].includes(message.type)) {
+  if (!['renderPreview','cancelPreview','previewItem','previewFlowState'].includes(message.type)) {
     try { persistSession(); } catch(error) { send('historyError',{message:'Не удалось сохранить диалог: '+error.message}); }
   }
 }
