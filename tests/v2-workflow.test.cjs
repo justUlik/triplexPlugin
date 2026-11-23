@@ -302,4 +302,58 @@ module._compile(source + `
    for(const scope of ['catalog','copy','states'])assert.ok(app.run('editorialContext("'+scope+'").length')<4000);
    assert.equal(app.run('editorialPolicy.rules.every(rule=>rule.sources.length>0&&rule.sources.every(source=>editorialPolicy.sources.some(item=>item.id===source.id)))'),true);
  });
+
+ function stateVariantFixture() {
+   const app=statePreviewFixture();
+   const set={type:'COMPONENT_SET',name:'NumberField',children:[]};
+   const names=['Size=MD, Theme=Light, State=Default','Size=MD, Theme=Light, State=Focus','Size=MD, Theme=Light, State=Error','Size=LG, Theme=Light, State=Error','Size=MD, Theme=Dark, State=Error'];
+   set.children=names.map((name,i)=>({type:'COMPONENT',key:'variant-'+i,name,parent:set,componentPropertyDefinitions:{'Label#1':{type:'TEXT',defaultValue:'Label'}}}));
+   app.source.children[0].mainComponent=set.children[0];
+   app.ctx.field=app.source.children[0];
+   app.run('approvedSource.signature=layoutSignature(pixso.getNodeById("source"))');
+   return {...app,set};
+ }
+ test('state context exposes only compatible variants with stable keys',()=>{
+   const app=stateVariantFixture();
+   const fields=JSON.parse(app.run('JSON.stringify(confirmedFlowFields(pixso.getNodeById("source")))'));
+   assert.equal(fields[0].variants.length,3);
+   assert.equal(fields[0].variantOptions[1].key,'variant-1');
+   assert.equal(fields[0].variants.some(name=>name.includes('Size=LG')),false);
+   assert.equal(fields[0].variants.some(name=>name.includes('Theme=Dark')),false);
+ });
+ test('state matching accepts unique shorthand, reordered axes and stable keys without changing style',()=>{
+   const app=stateVariantFixture();
+   assert.equal(app.run('resolveStateVariant(field,{variant:"Focus"}).key'),'variant-1');
+   assert.equal(app.run('resolveStateVariant(field,{variant:"state=Error, theme=Light, size=MD"}).key'),'variant-2');
+   assert.equal(app.run('resolveStateVariant(field,{key:"variant-2"}).key'),'variant-2');
+   assert.throws(()=>app.run('resolveStateVariant(field,{variant:"Size=LG, Theme=Light, State=Error"})'),/size/);
+   assert.throws(()=>app.run('resolveStateVariant(field,{key:"variant-4"})'),/theme/);
+   assert.throws(()=>app.run('resolveStateVariant(field,{key:"variant-1",variant:"Error"})'),/разные состояния/);
+   assert.throws(()=>app.run('resolveStateVariant(field,{variant:"Состояние"})'),/не найден/);
+ });
+ test('generic Property axes support genuine states but reject size and theme changes',()=>{
+   const app=backend();
+   app.ctx.field={mainComponent:{name:'Property 1=Default, Size=MD, Theme=Light'}};
+   assert.equal(app.run('compatibleStateVariant(field,{name:"Property 1=Error, Size=MD, Theme=Light"})'),true);
+   assert.equal(app.run('compatibleStateVariant(field,{name:"Property 1=Error, Size=LG, Theme=Light"})'),false);
+   app.ctx.field.mainComponent.name='MD / Default / Light';
+   assert.equal(app.run('compatibleStateVariant(field,{name:"MD / Focus / Light"})'),true);
+   assert.equal(app.run('compatibleStateVariant(field,{name:"LG / Focus / Light"})'),false);
+   app.ctx.field.mainComponent.name='Disabled=False, Filled=False, Size=MD';
+   assert.equal(app.run('compatibleStateVariant(field,{name:"Disabled=True, Filled=True, Size=MD"})'),true);
+ });
+ test('key-only and shorthand state plans normalize to canonical variant names',async()=>{
+   const app=stateVariantFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   await app.run('reviewFlow({raw:JSON.stringify({states:[{name:"Фокус",condition:"Ввод",variants:[{field:1,key:"variant-1"}]},{name:"Ошибка",condition:"Проверка",variants:[{field:1,variant:"Error"}],errors:[{field:1,text:"Введите количество"}]}]})})');
+   assert.equal(app.messages.at(-1).type,'flowProposal');
+   assert.equal(app.run('flow.states[0].variants[0].variant'),'Size=MD, Theme=Light, State=Focus');
+   assert.equal(app.run('flow.states[1].variants[0].variant'),'Size=MD, Theme=Light, State=Error');
+ });
+ test('ambiguous state names cannot choose an arbitrary candidate',()=>{
+   const app=stateVariantFixture();
+   const second={...app.set.children[1],key:'variant-other',name:'Size=MD, Theme=Light, State=Focus, Filled=True'};
+   app.source.children[0].mainComponent.name+=' , Filled=False';
+   app.set.children[1].name+=' , Filled=False';app.set.children.push(second);
+   assert.throws(()=>app.run('resolveStateVariant(field,{variant:"Focus"})'),/неоднозначно/);
+ });
 `, __filename);

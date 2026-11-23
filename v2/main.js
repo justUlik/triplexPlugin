@@ -1973,7 +1973,8 @@ function confirmedFlowFields(source) {
       confirmed:approved ? {text:approved.text,value:approved.value,placeholder:approved.placeholder,readOnly:approved.readOnly,optionExample:approved.optionExample} : undefined,
       width:node.width,height:node.height,properties:node.componentProperties,stateCapabilities:componentStateCapabilities(node),
       currentVariant:node.mainComponent?.name,
-      variants:Array.from(node.mainComponent?.parent?.type==='COMPONENT_SET'?node.mainComponent.parent.children:[]).filter(n=>n.type==='COMPONENT').map(n=>n.name) };
+      variants:availableStateVariants(node).filter(variant=>compatibleStateVariant(node,variant)).map(variant=>variant.name),
+      variantOptions:availableStateVariants(node).filter(variant=>compatibleStateVariant(node,variant)).map(({key,name})=>({key,name})) };
   });
 }
 const stateRolePatterns = {
@@ -1985,14 +1986,72 @@ function availableStateVariants(node) {
   const current = node.mainComponent;
   return current?.parent?.type === 'COMPONENT_SET' ? Array.from(current.parent.children).filter(child => child.type === 'COMPONENT') : [];
 }
-function compatibleStateVariant(node, candidate) {
-  const dimensions = name => new Map(String(name || '').split(',').map(part=>part.split('=').map(text=>text.trim())).filter(pair=>pair.length===2));
-  const current=dimensions(node.mainComponent?.name), next=dimensions(candidate.name);
-  for(const [axis,value] of current) {
-    if(/state|status|focus|active|open|expand|error|hover|состояни|ошиб/i.test(axis))continue;
-    if(next.get(axis)!==value)return false;
+function variantToken(value) {
+  return String(value).normalize('NFKC').trim().toLowerCase().replace(/[ _-]+/g,'');
+}
+function variantAxes(name) {
+  const axes=new Map();
+  for(const part of String(name || '').split(',')) {
+    const equal=part.indexOf('=');
+    if(equal>=0)axes.set(variantToken(part.slice(0,equal)),part.slice(equal+1).trim());
   }
-  return true;
+  return axes;
+}
+function isStateValue(value) {
+  return /^(?:default|normal|empty|filled|hover|hovered|focus|focused|active|typing|error|invalid|warning|success|disabled|enabled|readonly|open|opened|closed|expanded|collapsed|selected|unselected|checked|unchecked|indeterminate|pressed|loading|обычн(?:ый|ое)|поумолчанию|пуст(?:ой|ое)|заполнен(?:ный|ное)|наведение|фокус|активн(?:ый|ое)|ошибка|неактивн(?:ый|ое)|раскрыт(?:ый|ое)|закрыт(?:ый|ое)|выбран(?:ный|ное)|загрузка)$/.test(variantToken(value));
+}
+function isStateAxis(axis,current,next) {
+  if(/^(?:state|status|focus|focused|active|typing|open|opened|expand|expanded|error|invalid|validation|hover|disabled|enabled|filled|empty|selected|checked|pressed|loading|readonly|состояние|статус|ошибка|фокус|активность|раскрытие)$/.test(axis))return true;
+  // Generic variant axes may hold state names, but never infer size/theme from them.
+  return /^(?:property\d*|variant\d*|свойство\d*|вариант\d*)$/.test(axis)&&isStateValue(current)&&isStateValue(next);
+}
+function variantChanges(node,candidate) {
+  const current=variantAxes(node.mainComponent?.name),next=variantAxes(candidate.name),changes=[];
+  for(const axis of new Set([...current.keys(),...next.keys()])) {
+    const before=current.get(axis),after=next.get(axis);
+    if(before!==undefined&&after!==undefined&&variantToken(before)===variantToken(after))continue;
+    if(before!==undefined&&after!==undefined&&isStateAxis(axis,before,after))continue;
+    changes.push(axis+': '+(before??'не задано')+' → '+(after??'не задано'));
+  }
+  if(!current.size&&!next.size) {
+    const before=String(node.mainComponent?.name || '').split(/[\/,]/).map(variantToken);
+    const after=String(candidate.name || '').split(/[\/,]/).map(variantToken);
+    if(before.length!==after.length||before.some((value,i)=>value!==after[i]&&!(isStateValue(value)&&isStateValue(after[i]))))changes.push('несовместимое оформление варианта');
+  }
+  return changes;
+}
+function compatibleStateVariant(node,candidate) {
+  return variantChanges(node,candidate).length===0;
+}
+function resolveStateVariant(node,choice) {
+  const variants=availableStateVariants(node),label=node.getPluginData?.('triplex-field-label')||node.name||choice.field;
+  const fail=message=>{throw new Error('Компонент «'+label+'»: '+message);};
+  if(choice.key!==undefined) {
+    const candidate=variants.find(variant=>variant.key===choice.key);
+    if(!candidate)return fail('библиотечный ключ варианта не найден.');
+    if(choice.variant&&variantToken(choice.variant)!==variantToken(candidate.name))return fail('ключ и название варианта указывают на разные состояния.');
+    const changes=variantChanges(node,candidate);
+    if(changes.length)return fail('вариант «'+candidate.name+'» меняет '+changes.join('; ')+'.');
+    return candidate;
+  }
+  const exact=variants.find(variant=>variant.name===choice.variant);
+  if(exact) {
+    const changes=variantChanges(node,exact);
+    if(changes.length)return fail('вариант «'+choice.variant+'» меняет '+changes.join('; ')+'.');
+    return exact;
+  }
+  const requested=variantAxes(choice.variant);
+  const matches=variants.filter(candidate=>{
+    if(!compatibleStateVariant(node,candidate))return false;
+    if(variantToken(candidate.name)===variantToken(choice.variant))return true;
+    const axes=variantAxes(candidate.name);
+    if(requested.size)return [...requested].every(([axis,value])=>axes.has(axis)&&variantToken(axes.get(axis))===variantToken(value));
+    return [...axes].some(([axis,value])=>isStateAxis(axis,value,value)&&variantToken(value)===variantToken(choice.variant));
+  });
+  if(matches.length===1)return matches[0];
+  if(matches.length>1)return fail('состояние «'+choice.variant+'» неоднозначно. Используйте точное название или key из variantOptions.');
+  const available=variants.filter(candidate=>compatibleStateVariant(node,candidate)).slice(0,6).map(candidate=>candidate.name);
+  return fail('вариант «'+choice.variant+'» не найден. Доступны: '+(available.join('; ')||'только свойства текущего компонента')+'.');
 }
 function componentStateCapabilities(node) {
   const properties=Object.entries(node.componentProperties || {});
@@ -2077,7 +2136,7 @@ function requestFlow({ requirements, feedback, standard, selection, edits, mode 
     'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
     'Верни только JSON: {"reply":"Объяснение","states":[{"name":"Название","condition":"Когда показать","values":{"field-id":"значение"},"variants":[{"field":"field-id","variant":"точное имя доступного варианта"}],"properties":[{"field":"field-id","values":{"точный ключ BOOLEAN/TEXT из properties":true}}],"errors":[{"field":"field-id или пустая строка для формы","text":"Текст ошибки"}]}]}.',
     'Для каждого состояния обязательно укажи name и condition. Если нет значений/ошибок, передай values:{} и errors:[], без null. field копируй из fields.field, не из номера каталога или позиции строки.',
-    'Дай до 24 релевантных состояний. properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields и варианты из variants. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
+    'Дай до 24 релевантных состояний. properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields; для variants скопируй key из variantOptions (предпочтительно) или точное полное имя. Не передавай название оси «State»/«Состояние» вместо значения. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
     'fields — фактически подтверждённые компоненты с холста, их назначение, текущие свойства и доступные варианты. confirmedTask и decisions — исходная задача и решения пользователя. Следуй им; не возвращай удалённые или заменённые компоненты.',
     'Не предлагай ввод для компонента отображения Amount/Text. Учитывай поведение компонента: не предлагай невозможные действия (например ввод букв, если поле их отфильтровывает). Не меняй размер или тему ради ошибки. Используй только точные варианты из fields.',
     'Если раскрытие/active отсутствуют и в variants и в BOOLEAN properties, не включай их в states, а явно объясни ограничение в reply. В reply максимум два коротких предложения о предложениях. Не пересказывай устройство формы и каталог. Для каждого состояния дай понятные name и condition, конкретные values и точные тексты errors. Не делай выводов об отсутствии компонентов во всей дизайн-системе по ограниченной справке.',
@@ -2136,7 +2195,7 @@ function requestFlowRepair(message,error) {
   send('flowRequest',{repairing:true,prompt:[
     'Исправь ответ о состояниях формы. Верни только JSON {"reply":"Краткое пояснение","states":[{"name":"Название","condition":"Когда показать","values":{},"variants":[],"properties":[],"errors":[]}]}. Все field копируй из fields.field как строки; для общей ошибки формы используй field:"". Не подставляй ID типа из каталога.',
     'Ошибка проверки: '+(error.message||String(error)),
-    'Используй только реальные field, точные variants и свойства BOOLEAN/TEXT из fields. Не меняй размер/тему. Description содержит текст ошибки; отдельно нужен доступный error-variant/BOOLEAN. Раскрытие и активность допустимы только при доступном свойстве/варианте. Если реализация недоступна, объясни это в reply, не имитируй её пустой копией.',
+    'Используй только реальные field, совместимые variants и свойства BOOLEAN/TEXT из fields. Для варианта предпочитай {field,key} из variantOptions; не выдумывай key и не используй название оси «Состояние» как имя варианта. Не меняй размер/тему. Description содержит текст ошибки; отдельно нужен доступный error-variant/BOOLEAN. Раскрытие и активность допустимы только при доступном свойстве/варианте. Если реализация недоступна, объясни это в reply, не имитируй её пустой копией.',
     JSON.stringify({...pendingFlow,confirmedTask:approvedSource.task,fields:confirmedFlowFields(source),invalidResponse:typeof message.raw==='string'?message.raw.slice(0,12000):''})
   ].join('\n')});
   return true;
@@ -2182,7 +2241,8 @@ function normalizeStatePlan(plan,nodes) {
     }
     state.variants=list(input.variants,path+'.variants',([field,variant])=>({field,variant})).map((choice,j)=>{
       const itemPath=path+'.variants['+(j+1)+']';statePlanObject(choice,itemPath);
-      return {...choice,field:fieldId(choice.field,itemPath+'.field'),variant:string(choice.variant,itemPath+'.variant')};
+      if(choice.key===undefined&&choice.variant===undefined)throw statePlanError(itemPath,'нужно точное variant или key из variantOptions');
+      return {...choice,field:fieldId(choice.field,itemPath+'.field'),key:choice.key===undefined?undefined:string(choice.key,itemPath+'.key'),variant:choice.variant===undefined?undefined:string(choice.variant,itemPath+'.variant')};
     });
     state.properties=list(input.properties,path+'.properties',([field,values])=>({field,values})).map((patch,j)=>{
       const itemPath=path+'.properties['+(j+1)+']';statePlanObject(patch,itemPath);statePlanObject(patch.values,itemPath+'.values');
@@ -2203,6 +2263,7 @@ function reviewFlow({ raw }) {
   if (!pendingFlow || typeof raw !== 'string' || raw.length > 40000) throw new Error('Некорректный ответ GigaCode.');
   const nodes = new Map(sourceFields(source).map(node=>[node.getPluginData('triplex-field-id'),node]));
   const plan = normalizeStatePlan(parseModelResponse(raw),nodes);
+  for(const state of plan.states)validateStateBindings(state,nodes);
   completeInteractionStates(plan,nodes);
   for(const state of plan.states) validateStateBindings(state,nodes);
   flow = { ...pendingFlow, states: plan.states, reply: plan.reply };
@@ -2216,8 +2277,8 @@ function validateStateBindings(state,nodes) {
   for(const choice of state.variants || []) {
     if(variants.has(choice.field))throw new Error('Для компонента переданы несколько вариантов одного состояния.');
     const node=nodes.get(choice.field);
-    const variant=availableStateVariants(node).find(candidate=>candidate.name===choice.variant);
-    if(!variant||!compatibleStateVariant(node,variant))throw new Error('Недоступен вариант состояния «'+choice.variant+'». Размер и тему менять нельзя.');
+    const variant=resolveStateVariant(node,choice);
+    choice.variant=variant.name;
     variants.set(choice.field,variant);
   }
   if(state.properties!==undefined&&!Array.isArray(state.properties))throw new Error('Некорректные свойства состояния.');
@@ -2258,8 +2319,7 @@ async function applyStateToCopy(copy,state,source) {
   for(const patch of state.properties||[])if(Object.entries(patch.values).some(([key,value])=>value===true&&componentStateCapabilities(fields.get(patch.field)).opened.includes(key)))expandedFields.add(patch.field);
   for (const choice of state.variants || []) {
     const field = fields.get(choice.field);
-    const current = field?.mainComponent;
-    const variant = current?.parent?.type === 'COMPONENT_SET' && current.parent.children.find(n => n.type === 'COMPONENT' && n.name === choice.variant);
+    const variant = field && resolveStateVariant(field,choice);
     if (!variant || typeof field.swapComponent !== 'function') throw new Error('Недоступен вариант «' + choice.variant + '». Уточните состояние в чате.');
     const values = field.componentProperties || {};
     field.swapComponent(variant);
