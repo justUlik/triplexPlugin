@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.9' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.10' });
 
 function yieldToEditor() { return new Promise(resolve=>setTimeout(resolve,0)); }
 const variantMetadataCache = new WeakMap();
@@ -1425,7 +1425,7 @@ function requestFlow({ requirements, feedback, standard, selection, edits }) {
 function reviewFlow({ raw }) {
   const source = lockedSource();
   if (!pendingFlow || typeof raw !== 'string' || raw.length > 40000) throw new Error('Некорректный ответ GigaCode.');
-  const plan = JSON.parse(raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1'));
+  const plan = parseModelResponse(raw);
   const ids = new Set(sourceFields(source).map(n => n.getPluginData('triplex-field-id')));
   if (typeof plan?.reply !== 'string' || !Array.isArray(plan.states) || plan.states.length > 24 ||
       plan.states.some(state => typeof state?.name !== 'string' || !state.name.trim() ||
@@ -1575,6 +1575,55 @@ function sendPlanRequest(revision) {
   send('prepared', { prompt });
 }
 
+function parseModelResponse(raw,limit=40000) {
+  const fail=()=>{const error=new Error('Не удалось прочитать JSON ответа GigaCode. Ответ отправляется на проверку формата; если ошибка повторится, повторите запрос.');error.code='MODEL_JSON';return error;};
+  if(typeof raw!=='string'||raw.length>limit)throw fail();
+  const text=raw.replace(/^\uFEFF/,'').trim();
+  const parse=value=>{let result=JSON.parse(value);if(typeof result==='string')result=JSON.parse(result);return result;};
+  try {return parse(text);} catch {}
+  const fenced=text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if(fenced){try{return parse(fenced[1]);}catch{throw fail();}}
+  const start=text.search(/[\[{]/);
+  if(start<0)throw fail();
+  const stack=[];let quoted=false,escaped=false;
+  for(let i=start;i<text.length;i++) {
+    const char=text[i];
+    if(quoted){if(escaped)escaped=false;else if(char==='\\')escaped=true;else if(char==='"')quoted=false;continue;}
+    if(char==='"'){quoted=true;continue;}
+    if(char==='{'||char==='[')stack.push(char);
+    if(char==='}'||char===']') {
+      const open=stack.pop();if(open!==(char==='}'?'{':'['))throw fail();
+      if(!stack.length){
+        if(/^[\s]*[\[{]/.test(text.slice(i+1)))throw fail();
+        try{return parse(text.slice(start,i+1));}catch{throw fail();}
+      }
+    }
+  }
+  throw fail();
+}
+
+function componentValueType(value) {return typeof value==='boolean'?'BOOLEAN':typeof value==='string'?'TEXT':undefined;}
+function mapReplacementValues(values,fields,previous,targetName) {
+  const oldFields=new Map(editableProperties(previous.variants[previous.variant]));
+  const base=key=>key.replace(/#.*$/,'').replace(/[ _-]/g,'').toLowerCase();
+  const mapped={},skipped=[];
+  for(const [key,value] of Object.entries(values)) {
+    const type=componentValueType(value);
+    if(!type||(type==='TEXT'&&value.length>3000))throw revisionFormatError('Некорректное значение свойства «'+key+'».');
+    let target=fields.has(key)?key:undefined;
+    if(!target){const matches=[...fields].filter(([name,prop])=>base(name)===base(key)&&prop.type===type);if(matches.length===1)target=matches[0][0];}
+    if(!target&&type==='TEXT'&&componentKnowledge({name:targetName})?.name==='Text'&&/^(?:value|amount|sum|значение|сумма)$/i.test(base(key))) {
+      const displayFields=[...fields].filter(([name,prop])=>prop.type==='TEXT'&&/^(?:text|content|value|текст|значение)$/i.test(base(name)));
+      if(displayFields.length===1)target=displayFields[0][0];
+    }
+    if(target&&fields.get(target)?.type===type){mapped[target]=value;continue;}
+    const oldMatch=[...oldFields].some(([name,prop])=>(name===key||base(name)===base(key))&&prop.type===type);
+    if(oldMatch){skipped.push(key.replace(/#.*$/,''));continue;}
+    throw revisionFormatError('Свойство «'+key+'» отсутствует у нового компонента. При замене передай uid, key, component; настройки нового типа согласуются после замены.');
+  }
+  return {mapped,skipped};
+}
+
 function normalizeModelLabel(item, index, previous) {
   // Some CLI responses call the visible label `label` or `title`.
   // Never use `name`: it may be the library component name, not the user's label.
@@ -1595,7 +1644,7 @@ function normalizeModelLabel(item, index, previous) {
 }
 
 function requestLabelRepair(message, error) {
-  if (!['MODEL_LABEL', 'MODEL_REVISION', 'MODEL_IDENTITY'].includes(error.code) || !prepared || !['review', 'reviewDialog'].includes(message.type) || prepared.labelRepairAttempted) return false;
+  if (!['MODEL_LABEL', 'MODEL_REVISION', 'MODEL_IDENTITY', 'MODEL_JSON'].includes(error.code) || !prepared || !['review', 'reviewDialog'].includes(message.type) || prepared.labelRepairAttempted) return false;
   prepared.labelRepairAttempted = true;
   const dialog = message.type === 'reviewDialog';
   const prompt = [
@@ -1616,12 +1665,7 @@ function requestLabelRepair(message, error) {
 async function review(raw) {
   if (!prepared) throw new Error('Сначала запросите компоненты.');
   if (typeof raw !== 'string' || raw.length > 30000) throw new Error('Некорректный ответ GigaCode.');
-  let plan;
-  try {
-    plan = JSON.parse(raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1'));
-  } catch {
-    throw new Error('GigaCode вернул ответ без плана компонентов.');
-  }
+  const plan=parseModelResponse(raw,30000);
   if (typeof plan?.reason === 'string') throw new Error(plan.reason.slice(0, 200));
   if (!Array.isArray(plan?.items) || plan.items.length > 12) {
     throw new Error('В плане должно быть не больше 12 полей.');
@@ -1770,6 +1814,7 @@ async function requestConversation({ revision }) {
     'Ответь JSON: {"reply":"ответ пользователю","action":"reply|configure|list","updates":[{"uid":1,"variant":0,"values":{},"error":""}],"items":[{"uid":1}]}',
     'reply — вопрос или объяснение без изменений. configure — изменения свойств, текстов, ошибок любого существующего компонента.',
     'На этапе list правки подписей, подсказок, значений, readOnly и ошибок передавай в updates через text, placeholder, value, readOnly, error. На остальных этапах используй values и variant.',
+    'При замене типа НЕ передавай values и variant от старого компонента. Передай uid, key, component и изменяемые подписи/значения; новый компонент будет настроен отдельно. TextView — отображение текста, не TextField для ввода. Если в каталоге это Text, укажи component:Text и его key.',
     'При добавлении и замене типа обязательно передай component из doc и key из той же строки каталога. ID не переносится между каталогами. Для сохранения существующего поля достаточно uid. Весь тип сверяется кодом до импорта.',
     'updates содержит только изменяемые поля. values использует точные ключи fields. variant — индекс из variants. Не выдумывай ключи и варианты.',
     'На этапе list любые правки возвращай action:list и полный итоговый items. Удали из items ненужные строки. {"uid":1} сохраняет компонент, {"uid":1,"id":7} ЗАМЕНЯЕТ его тип на id=7 из каталога, сохраняя подпись. {"id":7,"text":"Подпись"} добавляет новый компонент. Поля text/placeholder/value/readOnly меняют настройки строки.',
@@ -1915,17 +1960,22 @@ async function reviewListRevision(response) {
       conversation = history;
     }
   }
+  const replacementNotes=[];
   const nextItems = rows.map(({ previous, patch, spec, replace }) => {
     let item = replace ? { ...imported.shift(), confirmed: false } : { ...previous };
     if (replace && previous) item.uid = previous.uid;
     for (const key of ['text', 'placeholder', 'value', 'readOnly', 'optionExample']) if (spec[key] !== undefined) item[key] = spec[key];
-    if (patch.variant !== undefined) item.variant = normalize(patch.variant);
+    if (patch.variant !== undefined && !replace) item.variant = normalize(patch.variant);
     else if (patch.readOnly !== undefined) {
       const variant = item.variants.findIndex(component => isReadOnly(component.name) === patch.readOnly);
       if (variant >= 0) item.variant = variant;
     }
     if (!Number.isInteger(item.variant) || !item.variants[item.variant]) throw new Error('Недоступный вариант нового компонента.');
     const fields = new Map(editableProperties(item.variants[item.variant]));
+    if(replace&&previous&&patch.value===undefined&&componentKnowledge({name:item.name})?.name==='Text') {
+      const oldValue=Object.entries(previous.values||{}).find(([key,value])=>typeof value==='string'&&/^(?:value|amount|sum|значение|сумма)(?:#|$)/i.test(key));
+      if(oldValue)item.value=oldValue[1];
+    }
     // Preserve compatible manual values only within the same component type.
     if (!replace && item.variant !== previous.variant) {
       item.values = Object.fromEntries(Object.entries(item.values || {}).filter(([key, value]) => fields.get(key)?.type === (typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT')));
@@ -1939,11 +1989,16 @@ async function reviewListRevision(response) {
       for (const [key, prop] of fields) if (prop.type === 'TEXT' && matches(key)) { item.values[key] = patch[name]; delete item.texts[key]; }
     }
     if (patch.values !== undefined) {
-      if (!patch.values || typeof patch.values !== 'object' || Array.isArray(patch.values)) throw new Error('Некорректные свойства компонента.');
+      if (!patch.values || typeof patch.values !== 'object' || Array.isArray(patch.values)) throw revisionFormatError('Некорректные свойства компонента.');
+      let values=patch.values;
+      if(replace&&previous){
+        const result=mapReplacementValues(values,fields,previous,item.name);values=result.mapped;
+        if(result.skipped.length)replacementNotes.push('«'+item.text+'»: свойства прежнего типа не перенесены ('+[...new Set(result.skipped)].join(', ')+'). Проверьте настройки нового компонента.');
+      }
       item.values = { ...item.values };
-      for (const [key, value] of Object.entries(patch.values)) {
+      for (const [key, value] of Object.entries(values)) {
         const type = fields.get(key)?.type;
-        if (type === 'TEXT' ? typeof value !== 'string' || value.length > 3000 : type !== 'BOOLEAN' || typeof value !== 'boolean') throw new Error('Ответ содержит недоступное свойство нового компонента.');
+        if (type === 'TEXT' ? typeof value !== 'string' || value.length > 3000 : type !== 'BOOLEAN' || typeof value !== 'boolean') throw revisionFormatError('Свойство «'+key+'» недоступно у нового компонента.');
         item.values[key] = value;
       }
     }
@@ -1962,11 +2017,11 @@ async function reviewListRevision(response) {
   activePreview = undefined;
   conversation.push({ role: 'assistant', text: changesApplied.join('\n') });
   send('proposal', { target: pixso.getNodeById(context.bodyId)?.name, items: descriptions,
-    changes: changesApplied, reply: '', revisionPending: false });
+    changes: changesApplied, notes:replacementNotes, reply: '', revisionPending: false });
 }
 
 async function reviewConversation(raw) {
-  const response = JSON.parse(raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1'));
+  const response = parseModelResponse(raw);
   if (typeof response.reply !== 'string' || !['reply', 'configure', 'list'].includes(response.action)) {
     throw new Error('Не удалось прочитать ответ. Повторите отправку.');
   }
@@ -2079,7 +2134,7 @@ function requestCopy(revision = '') {
 }
 
 async function reviewCopy(raw) {
-  const entry = JSON.parse(raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1'));
+  const entry = parseModelResponse(raw);
   if (typeof entry?.text !== 'string' || !entry.text.trim() ||
       ['text', 'placeholder', 'value', 'error'].some(key =>
         entry[key] != null && (typeof entry[key] !== 'string' || entry[key].length > 3000))) {
@@ -2155,7 +2210,8 @@ function describeItem(item, suggest = false, showAllFields = false) {
   };
   const label = put('Подпись', isLabel, item.text);
   const placeholder = put('Плейсхолдер', key => /^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i.test(key), item.placeholder);
-  const value = put('Моковое значение', key => /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i.test(key), item.value);
+  const displayText=componentKnowledge({name:item.name})?.name==='Text';
+  const value = put('Моковое значение', key => /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i.test(key) || (displayText&&/^(?:text|content|текст)(?:#|$)/i.test(key)), item.value);
   return {
     uid: item.uid, name: item.name, text: item.text, copy, error: item.error, fillKeys: item.fillKeys,
     readOnly: isReadOnly(item.variants[item.variant].name), requestedReadOnly: item.readOnly, optionExample: item.optionExample,

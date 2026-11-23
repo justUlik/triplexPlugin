@@ -844,3 +844,58 @@ test('reported CFA mismatches cannot resolve NumberField, SelectField or Amount 
     assert.throws(()=>run('resolveCatalogIdentity(reportedEntry,reportedCatalog,true)'),/Несовпадение типа/);
   }
 });
+
+async function amountTextFixture() {
+  const app=revisionFixture();
+  app.components['5'].componentPropertyDefinitions={'Value#amount':{type:'TEXT',defaultValue:'100'},'Currency#amount':{type:'TEXT',defaultValue:'₽'}};
+  app.components['6'].componentPropertyDefinitions={'Text#view':{type:'TEXT',defaultValue:'Текст'}};
+  app.run(`prepared.catalog[5].name='Typography (W) / Text View';prepared.catalog[5].knowledgeName='Text';`);
+  await app.run(`review(JSON.stringify({items:[{id:5,text:'Сумма к оплате',value:'100 ₽'}]}))`);
+  app.run(`prepared.requireCatalogIdentity=true;prepared.stage='ready';prepared.items[0].values={'Value#amount':'250 ₽','Currency#amount':'₽'};prepared.items[0].confirmed=true;`);
+  return app;
+}
+test('Amount to TextView maps display value and drops obsolete Amount settings with an explicit note',async()=>{
+  const app=await amountTextFixture();
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил',items:[{uid:1,key:'6',component:'Text',variant:23,values:{'Value#amount':'300 ₽','Currency#amount':'₽'}}]}))`);
+  assert.equal(app.run('prepared.items[0].name'),'Typography (W) / Text View');
+  assert.equal(app.run('prepared.items[0].values["Text#view"]'),'300 ₽');
+  assert.equal(app.run('prepared.items[0].variant'),0);
+  assert.equal(app.run('prepared.items[0].confirmed'),false);
+  assert.equal(app.run('prepared.items[0].values["Currency#amount"]'),undefined);
+  assert.match(app.messages.at(-1).notes[0],/Currency/);
+  assert.equal(app.run('describeItem(prepared.items[0]).fields[0].value'),'300 ₽');
+});
+test('Amount to TextView without copied props retains the last manually agreed display value',async()=>{
+  const app=await amountTextFixture();
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил',items:[{uid:1,key:'6',component:'Text'}]}))`);
+  assert.equal(app.run('describeItem(prepared.items[0]).fields[0].value'),'250 ₽');
+});
+test('generic Text prop resolves to the actual hashed TextView property',async()=>{
+  const app=await amountTextFixture();
+  await app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил',items:[{uid:1,key:'6',component:'Text',values:{Text:'Итого: 300 ₽'}}]}))`);
+  assert.equal(app.run('describeItem(prepared.items[0]).fields[0].value'),'Итого: 300 ₽');
+});
+test('genuinely unknown properties still reject atomically instead of being silently lost',async()=>{
+  const app=await amountTextFixture();
+  const before=app.run('JSON.stringify(prepared.items)');
+  await assert.rejects(app.run(`reviewConversation(JSON.stringify({action:'list',reply:'Заменил',items:[{uid:1,key:'6',component:'Text',values:{UnrelatedProperty:'abc'}}]}))`),/UnrelatedProperty/);
+  assert.equal(app.run('JSON.stringify(prepared.items)'),before);
+});
+test('JSON parser accepts explanatory wrappers, fences and double encoded objects without corrupting text',()=>{
+  const {ctx,run}=backend();
+  for(const raw of [
+    'Вот ответ:\n{"action":"list","reply":"Текст: {сумма} и \\\"рубли\\\"","items":[]}\nГотово.',
+    'Предлагаю:\n```json\n{"items":[]}\n```',
+    JSON.stringify(JSON.stringify({items:[]}))
+  ]){ctx.rawInput=raw;assert.ok(Array.isArray(run('parseModelResponse(rawInput).items')));}
+});
+test('malformed JSON triggers one format repair instead of exposing a syntax exception',async()=>{
+  const app=await amountTextFixture();app.ctx.badJson='{"action":"list","reply":"Заменил","items":[ unexpected character ]}';
+  await app.run('handleMessage({type:"reviewDialog",raw:badJson})');
+  assert.equal(app.messages.at(-1).type,'dialogRequest');
+  assert.equal(app.messages.at(-1).repairing,true);
+  await app.run('handleMessage({type:"reviewDialog",raw:badJson})');
+  assert.equal(app.messages.at(-1).type,'error');
+  assert.match(app.messages.at(-1).message,/Не удалось прочитать JSON/);
+  assert.equal(app.run('prepared.items[0].name'),'AmountField');
+});

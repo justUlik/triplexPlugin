@@ -58,7 +58,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.9</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.10</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -908,6 +908,7 @@ window.addEventListener('message', async event => {
       $('revision').value = '';
       if (message.changes?.length) addMessage('componentChat', 'GigaCode', 'Применённые изменения:\n' + message.changes.map(change => '• ' + change).join('\n'));
       else addMessage('componentChat', 'GigaCode', message.reply || 'Набор компонентов показан ниже.');
+      if(message.notes?.length)addMessage('componentChat','Плагин',message.notes.map(note=>'• '+note).join('\n'));
       $('target').textContent = 'Фрейм для вставки — ' + (message.target || 'выбранный фрейм');
       $('plan').hidden = false;
       status(message.items.length ? '' : 'В предложении больше нет компонентов.');
