@@ -36,4 +36,26 @@ assert.equal(await page.locator('#items input[type=text]').inputValue(),'Нов�
 await page.screenshot({path:'/tmp/v2-properties.png'});
 await page.getByRole('button',{name:'Подтвердить',exact:true}).click();assert.equal(await page.evaluate(()=>sent.at(-1).type),'confirmItem');
 await receive({type:'readyToApply',items:[{uid:1,text:'Количество ЦФА',name:'NumberField'}]});await page.click('#backComponent');assert.equal(await page.evaluate(()=>sent.at(-1).type),'backComponent');
-assert.deepEqual(errors,[]);console.log('v2 browser smoke passed: placement retry, loading, proposal, revision, automatic preview, confirm, back');await browser.close();})();
+await receive({type:'applied',count:1,target:'BodyPage',items:[{uid:1,name:'NumberField',text:'Количество ЦФА'}]});
+assert.equal(await page.locator('#addComponentStates').isVisible(),true);
+await page.screenshot({path:'/tmp/v2-states-entry.png',fullPage:true});
+await page.click('#addComponentStates');await page.screenshot({path:'/tmp/v2-states-choice.png',fullPage:true});assert.equal(await page.locator('#scenario').isVisible(),true);
+assert.equal(await page.locator('#stateModeChoices input:checked').count(),0);
+await page.check('#stateModeAnalytics');assert.equal(await page.locator('#analyticsField').isVisible(),true);
+await page.screenshot({path:'/tmp/v2-states-analytics.png',fullPage:true});
+await page.fill('#analytics','При пустом количестве показать ошибку: Укажите количество');await page.click('#flowSend');
+assert.equal(await page.evaluate(()=>sent.at(-1).type),'requestStates');assert.equal(await page.evaluate(()=>sent.at(-1).mode),'analytics');
+await receive({type:'flowProposal',mode:'analytics',reply:'Предлагаю активное поле и ошибку.',fields:[{field:'1',component:'NumberField',label:'Количество ЦФА'}],labels:{'1':'Количество ЦФА'},states:[{name:'Активное печатание',condition:'Пользователь вводит количество',values:{'1':'10'},properties:[{field:'1',values:{Active:true}}],errors:[]},{name:'Пустое количество',condition:'Отправка без количества',values:{'1':''},errors:[{field:'1',text:'Укажите количество'}]}]});
+assert.equal(await page.locator('.state-card').count(),2);assert.equal(await page.locator('.state-component').first().textContent(),'NumberFieldКоличество ЦФА');
+assert.equal(await page.locator('.flow-buttons button:visible').count(),2);
+await page.screenshot({path:'/tmp/v2-states-proposal.png',fullPage:true});
+await page.click('#approveFlow');assert.equal(await page.evaluate(()=>sent.at(-1).type),'approveFlow');
+await receive({type:'flowApproved'});assert.equal(await page.evaluate(()=>sent.at(-1).type),'createStates');
+await receive({type:'statesCreated',count:2,errorsPending:0,skipped:0});
+await page.check('#stateModeAuto');assert.equal(await page.evaluate(()=>sent.at(-1).type),'requestStates');assert.equal(await page.evaluate(()=>sent.at(-1).mode),'auto');
+await receive({type:'flowProposal',mode:'auto',reply:'Варианты для поля количества.',fields:[{field:'1',component:'NumberField',label:'Количество ЦФА'}],labels:{'1':'Количество ЦФА'},states:[{name:'Активное печатание',condition:'Ввод количества',values:{'1':'10'},properties:[{field:'1',values:{Active:true}}],errors:[]}]});
+await page.screenshot({path:'/tmp/v2-states-auto.png',fullPage:true});
+await receive({type:'sessionRestored',stage:'done',hasSource:true,formPlaced:true,ui:{stateMode:'auto',statesExpanded:true,task:'Форма инвестирования',size:'MD'},items:[{uid:1,name:'NumberField',text:'Количество ЦФА'}]});
+assert.equal(await page.locator('#stateModeChoices input:checked').count(),0);assert.equal(await page.locator('#scenario').isVisible(),true);assert.equal(await page.locator('#items>li').count(),1);
+
+assert.deepEqual(errors,[]);console.log('v2 browser smoke passed: placement, revisions, live preview, both state modes, analytics, approval and generation');await browser.close();})();

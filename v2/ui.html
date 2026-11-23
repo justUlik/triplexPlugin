@@ -78,6 +78,24 @@
   #listActions[data-waiting=true]{display:none}
   .remove-component{display:flex;align-items:center;justify-content:center}.remove-component svg{display:block;flex:none}
   #items .component-preview img{margin:16px 0;object-position:left center}
+
+  #addComponentStates{margin-top:16px} #scenario{margin-top:16px;padding:0;border:0;background:white}
+  #scenario h2{font-size:16px;font-weight:500;line-height:20px;margin:0 0 16px}
+  #stateModeChoices{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:16px;min-width:0}
+  #scenario .state-mode{display:flex;align-items:center;gap:8px;margin:0;padding:0;background:none;color:#000;font-size:16px;line-height:20px;cursor:pointer;outline:0}
+  .state-mode input{appearance:none;display:block;flex:none;width:16px;height:16px;margin:0;border:0;background:url('data:image/svg+xml;base64,PHN2ZyBwcmVzZXJ2ZUFzcGVjdFJhdGlvPSJub25lIiBvdmVyZmxvdz0idmlzaWJsZSIgc3R5bGU9ImRpc3BsYXk6IGJsb2NrOyIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxjaXJjbGUgaWQ9IkVsbGlwc2UgMiIgY3g9IjgiIGN5PSI4IiByPSI3LjUiIGZpbGw9IiNGMkY0RjciIHN0cm9rZT0iIzkwOTA5MCIvPgo8L3N2Zz4K') center/16px 16px no-repeat;cursor:pointer}
+  .state-mode input:checked{background-image:url('data:image/svg+xml;base64,PHN2ZyBwcmVzZXJ2ZUFzcGVjdFJhdGlvPSJub25lIiBvdmVyZmxvdz0idmlzaWJsZSIgc3R5bGU9ImRpc3BsYXk6IGJsb2NrOyIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxjaXJjbGUgaWQ9IkVsbGlwc2UgMiIgY3g9IjgiIGN5PSI4IiByPSI2IiBmaWxsPSIjRDlEOUQ5IiBzdHJva2Utd2lkdGg9IjQiIHN0cm9rZT0iIzIxQTE5QSIvPgo8L3N2Zz4K')}
+  .state-mode input:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:50%}
+  .flow-textarea{position:relative;display:block;width:100%;min-height:96px;margin:16px 0 0;padding:10px 12px;font-size:12px;line-height:16px}
+  .flow-textarea>span{display:block}.flow-textarea textarea{min-height:60px}
+  .flow-textarea:has(textarea:placeholder-shown):not(:focus-within)>span{position:absolute;top:18px;font-size:16px;line-height:20px;pointer-events:none}
+  .flow-textarea:not(:focus-within) textarea::placeholder{color:transparent}
+  #flowChat{margin:16px 0 0} #flowChat .message{width:71%;background:var(--field);border:1px solid var(--accent);border-radius:10px;padding:10px 12px;white-space:normal;font-size:16px;line-height:20px}
+  #flowChat .message.user{margin-left:auto} #flowChat strong{display:block;font-size:12px;color:var(--muted);font-weight:400;line-height:16px} #flowChat p{margin:0;white-space:pre-wrap}
+  #flowChoices{display:flex;flex-direction:column;gap:16px;margin-top:16px} .state-card{margin:0;padding:0;border:0;background:white;border-radius:0} .state-card h3{font-size:16px;font-weight:400;line-height:20px;margin:0 0 8px}
+  .state-component{display:flex;flex-direction:column;background:var(--field);border-radius:10px;padding:10px 12px;min-height:56px;margin:8px 0 0} .state-component small{font-size:12px;color:var(--muted);line-height:16px} .state-component span{font-size:16px;line-height:20px}
+  .state-card details{border:0;padding:0;margin:8px 0 0;background:white}.state-card summary{font-size:12px;font-weight:400;color:var(--accent)}.state-include{display:flex;align-items:center;gap:8px}.state-include input{width:16px;height:16px;accent-color:var(--accent)}
+  #stateActions{margin-top:16px}.flow-buttons{display:flex;gap:16px;align-items:start;margin-top:16px}.flow-buttons button{white-space:nowrap}#plan[data-stage=done] .remove-component{display:none}
 </style>
 </head>
 <body>
@@ -98,7 +116,7 @@
 <button id="place" type="button" hidden disabled>Повторить попытку</button>
 <section id="formSetup" hidden>
   <div id="modelSettings">
-    
+
     <label><span>Токен GigaCode CLI</span><input id="token" type="password" autocomplete="off" placeholder="Введите значение"></label>
     <label hidden>Правила текстового стандарта Triplex <textarea id="standard" maxlength="8000" placeholder="Вставьте правила канала для этой формы"></textarea></label>
   </div>
@@ -139,16 +157,26 @@
   <button id="lockLayout" type="button">Закрепить верстку</button>
   <button id="unlockLayout" type="button" hidden>Изменить верстку</button>
 </section>
-<details id="scenario" hidden>
-  <summary>Состояния и ошибки</summary>
-  <ol id="flowChat" role="log"></ol>
+<button id="addComponentStates" class="primary" type="button" hidden>Добавить состояния компонент</button>
+<section id="scenario" hidden>
+  <h2>Состояния компонент</h2>
+  <fieldset id="stateModeChoices" aria-label="Сценарий состояний">
+    <label class="state-mode"><input id="stateModeAuto" type="radio" name="stateMode" value="auto"><span>Посмотреть предложенные GigaCode</span></label>
+    <label class="state-mode"><input id="stateModeAnalytics" type="radio" name="stateMode" value="analytics"><span>Предоставить аналитику</span></label>
+  </fieldset>
+  <label id="analyticsField" class="flow-textarea" hidden><span>Описание аналитики</span><textarea id="analytics" maxlength="12000" placeholder="Введите значение"></textarea></label>
+  <ol id="flowChat" role="log" aria-live="polite"></ol>
   <div id="flowChoices"></div>
-  <p id="flowIntro" class="hint">Сначала GigaCode предложит состояния и ошибки по вашей задаче и собранному экрану. Затем можно будет выбрать варианты и дополнить кейс.</p>
-  <label id="flowFeedback" hidden>Уточните кейс, чтобы дополнить состояния и ошибки <textarea id="feedback" maxlength="2000" placeholder="Например, добавь ошибки для перевода на закрытый счёт"></textarea></label>
-  <button id="flowSend" type="button">Предложить состояния и ошибки</button>
-  <button id="approveFlow" type="button" hidden>Утвердить состояния и ошибки</button>
-  <button id="createStates" type="button" hidden>Создать выбранные состояния рядом с фреймом</button>
-</details>
+  <p id="flowIntro" class="hint" hidden></p>
+  <div id="stateActions">
+    <label id="flowFeedback" class="flow-textarea" hidden><span>Доработка</span><textarea id="feedback" maxlength="2000" placeholder="Доработка"></textarea></label>
+    <div class="flow-buttons">
+      <button id="flowSend" class="primary" type="button" hidden>Добавить состояния компонент</button>
+      <button id="approveFlow" type="button" hidden>Подтвердить</button>
+      <button id="createStates" type="button" hidden>Поставить состояния на макет</button>
+    </div>
+  </div>
+</section>
 <button id="retry" type="button" hidden>Повторить отправку</button>
 
 <script>
@@ -171,6 +199,10 @@ let wasRevised = false;
 let revisionPending = false;
 let confirmAfterDiscard = false;
 let flowApproved = false;
+let statesExpanded=false;
+let stateMode='';
+let flowFields=[];
+let creatingApprovedStates=false;
 let hasFlowDraft = false;
 let hasFlowResponse = false;
 let hasSource = false;
@@ -187,7 +219,7 @@ let sessionSaveTimer;
 function sessionUISnapshot() {
   return { task:$('task').value, standard:$('standard').value, feedback:$('feedback').value,
     revision:$('revision').value, size:selectedSize(), transcript, hasFlowDraft, hasFlowResponse,
-    flowDecisions:[...flowDecisions], flowEdits, draft:stage==='copy' ? readDraft?.() : undefined };
+    flowDecisions:[...flowDecisions], flowEdits, stateMode,statesExpanded,analytics:$('analytics').value, draft:stage==='copy' ? readDraft?.() : undefined };
 }
 function saveSessionUI() {
   clearTimeout(sessionSaveTimer);sessionSaveTimer=undefined;
@@ -236,6 +268,9 @@ function restoreHistoryUI(message) {
     wasRevised=(saved.transcript||[]).filter(record=>record.author==='Вы').length>1;
     for(const record of saved.transcript||[]) {addMessage(record.chat,record.author,record.text);transcript.push(record);}
     for(const pair of saved.flowDecisions||[]) flowDecisions.set(pair[0],pair[1]);
+    stateMode=saved.stateMode||message.flow?.mode||'';if(!message.flow&&stateMode==='auto')stateMode='';statesExpanded=saved.statesExpanded===true||Boolean(message.flow);
+    $('analytics').value=saved.analytics||message.flow?.analytics||'';
+    flowFields=message.flowFields||[];
     if(message.flow?.states) renderFlowChoices(message.flow.states,message.labels,saved.flowEdits);
     hasFlowResponse=saved.hasFlowResponse===true || Boolean(message.flow);
     hasFlowDraft=saved.hasFlowDraft===true && Boolean(message.flow?.states?.length);
@@ -270,20 +305,25 @@ function status(text, error = false) {
 
 function setBusy(value) {
   busy = value;
-  for (const id of ['revise', 'revision', 'token', 'standard', 'feedback', 'flowSend', 'createStates', 'lockLayout', 'unlockLayout']) {
+  for (const id of ['revise', 'revision', 'token', 'standard', 'feedback', 'flowSend', 'createStates', 'lockLayout', 'unlockLayout','analytics','stateModeAuto','stateModeAnalytics','addComponentStates']) {
     $(id).disabled = value;
   }
   $('flowFeedback').hidden = !hasFlowResponse;
-  $('flowIntro').hidden = hasFlowResponse;
-  $('flowSend').textContent = hasFlowResponse ? 'Дополнить предложения' : 'Предложить состояния и ошибки';
+  $('flowIntro').hidden = true;
+  $('addComponentStates').hidden=stage!=='done'||statesExpanded;
+  $('analyticsField').hidden=stateMode!=='analytics'||hasFlowResponse||busy;
+  $('stateModeAuto').checked=stateMode==='auto';$('stateModeAnalytics').checked=stateMode==='analytics';
+  $('flowSend').hidden=!(hasFlowResponse||stateMode==='analytics'||(stateMode==='auto'&&$('status').classList.contains('error')));
+  $('flowSend').textContent=hasFlowResponse?'Отправить на доработку':stateMode==='auto'?'Повторить попытку':'Добавить состояния компонент';
+  for(const id of ['flowSend','approveFlow']){$(id).classList.toggle('loading',value);$(id).setAttribute('aria-busy',String(value));}
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
   $('approveFlow').disabled = value;
   $('layoutStep').hidden = true;
   $('lockLayout').hidden = layoutLocked;
   $('unlockLayout').hidden = !layoutLocked;
-  $('scenario').hidden = true;
+  $('scenario').hidden = stage!=='done'||!statesExpanded;
   $('flowChoices').querySelectorAll('button,input,textarea').forEach(button => { button.disabled = value; });
-  $('retry').hidden = !lastRequest || stage === 'list';
+  $('retry').hidden = !lastRequest || ['list','done'].includes(stage);
   $('retry').disabled = value;
   $('startForm').hidden = false;
   $('prepare').hidden = componentCount > 0;
@@ -298,7 +338,7 @@ function setBusy(value) {
   $('listActions').dataset.waiting = String(stage === 'list' && wasRevised && value);
   for(const id of ['prepare','revise','apply']) { $(id).classList.toggle('loading',value && !$(id).hidden); $(id).setAttribute('aria-busy',String(value)); }
   $('planTitle').textContent = stage === 'copy' ? 'Свойства компонентов' : stage === 'ready' ? 'Набор компонентов' : stage === 'done' ? 'Компоненты на макете' : wasRevised ? 'Доработки' : 'Предложенные компоненты';
-  $('createStates').hidden = !hasSource || !flowApproved;
+  $('createStates').hidden = true;
   $('items').querySelectorAll('input, select, textarea, button').forEach(control => { control.disabled = value; });
   $('openProperties').hidden = stage !== 'list';
   $('openProperties').disabled = value || !componentCount;
@@ -314,7 +354,7 @@ function setBusy(value) {
   $('newDialogue').disabled = $('refreshHistory').disabled = value;
   $('historyList').querySelectorAll('button').forEach(button=>{button.disabled=value;});
   if(historyReadOnly) {
-    for(const id of ['prepare','place','revise','openProperties','apply','lockLayout','unlockLayout','flowSend','approveFlow','createStates','keepCurrent']) $(id).disabled=true;
+    for(const id of ['prepare','place','revise','openProperties','apply','lockLayout','unlockLayout','flowSend','approveFlow','createStates','keepCurrent','addComponentStates','stateModeAuto','stateModeAnalytics','analytics']) $(id).disabled=true;
     $('items').querySelectorAll('input,select,textarea,button').forEach(control=>{control.disabled=true;});
     $('flowChoices').querySelectorAll('button,input,textarea').forEach(control=>{control.disabled=true;});
     for(const id of ['task','standard','revision','feedback']) $(id).disabled=true;
@@ -323,6 +363,7 @@ function setBusy(value) {
 
 function resetPlan() {
   revisionPending = false;
+  stateMode='';statesExpanded=false;creatingApprovedStates=false;flowFields=[];$('analytics').value='';
   $('plan').hidden = true;
   $('target').textContent = '';
   $('catalogInfo').hidden = true;
@@ -533,36 +574,37 @@ function fieldLabel(key) {
   return name;
 }
 
-for (const id of ['task', 'standard', 'feedback']) {
-  $(id).addEventListener('input', () => {
-    flowApproved = false;
-    hasFlowDraft = false;
-    post('invalidateFlow');
-    setBusy(busy);
-  });
+for(const id of ['task','standard']) $(id).addEventListener('input',()=>{
+  flowApproved=false;hasFlowDraft=false;post('invalidateFlow');setBusy(busy);
+});
+$('analytics').addEventListener('input',scheduleSessionSave);
+$('addComponentStates').onclick=()=>{if(!busy){statesExpanded=true;setBusy(false);scheduleSessionSave();}};
+function chooseStateMode(mode) {
+  if(busy||historyReadOnly)return;
+  if(stateMode!==mode){clearFlow();stateMode=mode;}
+  setBusy(false);scheduleSessionSave();
+  if(mode==='auto')sendStatesRequest();else $('analytics').focus();
 }
-
-$('approveFlow').onclick = () => {
-  if (busy || !hasFlowDraft) return;
-  setBusy(true);
-  post('approveFlow', { selection: flowSelection, edits:flowEdits });
-};
-
-$('flowSend').onclick = () => {
-  if (busy) return;
-  if (!$('token').value.trim()) {
-    $('modelSettings').open = true;
-    status('Введите код подключения из терминала.');
-    return;
-  }
-  const feedback = hasFlowResponse ? $('feedback').value.trim() : '';
-  flowApproved = false;
-  hasFlowDraft = false;
-  addMessage('flowChat', 'Вы', feedback || $('task').value.trim());
-  setBusy(true);
-  status(hasFlowResponse ? 'GigaCode дополняет состояния и ошибки…' : 'GigaCode предлагает состояния и ошибки…');
-  saveSessionUI();
-  post('requestFlow', { requirements: $('task').value, standard: $('standard').value, feedback, selection: flowSelection, edits:flowEdits });
+$('stateModeAuto').onchange=()=>chooseStateMode('auto');
+$('stateModeAnalytics').onchange=()=>chooseStateMode('analytics');
+function sendStatesRequest() {
+  if(busy||historyReadOnly)return;
+  if(!$('token').value.trim()){status('Введите код подключения из терминала.',true);$('token').focus();return;}
+  if(!stateMode)return;
+  const analytics=$('analytics').value.trim();
+  if(stateMode==='analytics'&&!analytics){status('Добавьте описание аналитики.',true);$('analytics').focus();return;}
+  const feedback=hasFlowResponse?$('feedback').value.trim():'';
+  if(hasFlowResponse&&!feedback){status('Опишите доработку состояний.',true);$('feedback').focus();return;}
+  if(feedback||stateMode==='analytics')addMessage('flowChat','Вы',feedback||analytics);
+  const pending=addMessage('flowChat','GigaCode','Подбираю состояния компонентов…');pending.dataset.flowPending='';
+  flowApproved=false;creatingApprovedStates=false;setBusy(true);
+  sendRequest('requestStates',{mode:stateMode,analytics,requirements:$('task').value,standard:$('standard').value,feedback,selection:flowSelection,edits:hasFlowResponse?flowEdits:undefined});
+}
+$('flowSend').onclick=sendStatesRequest;
+$('approveFlow').onclick=()=>{
+  if(busy||!hasFlowDraft)return;
+  creatingApprovedStates=true;setBusy(true);
+  post('approveFlow',{selection:flowSelection,edits:flowEdits});
 };
 
 function clearFlow() {
@@ -589,69 +631,38 @@ function disposeFlowPreviews() {
   for(const view of flowPreviewViews.values()) if(view.url) URL.revokeObjectURL(view.url);
   flowPreviewViews.clear();
 }
-function renderFlowChoices(states, labels = {}, savedEdits = flowEdits) {
-  disposeFlowPreviews();
-  flowStates = states;
-  const stateKey = state => JSON.stringify([state.name, state.condition]);
-  const sourceKey = state => JSON.stringify([state.name,state.condition,state.errors]);
-  const errorKey = error => JSON.stringify([error.field, error.text]);
-  const previous = new Map((savedEdits||[]).map(edit=>[edit.sourceKey,edit]));
-  flowEdits = states.map(state=>previous.get(sourceKey(state)) || {sourceKey:sourceKey(state),name:state.name,condition:state.condition,values:{...state.values},errorTexts:state.errors.map(error=>error.text)});
-  flowSelection = states.map(state => ({ included: flowDecisions.get(stateKey(state)) ?? true,
-    errors: state.errors.map(error => flowDecisions.get(errorKey(error)) ?? true) }));
+function renderFlowChoices(states,labels={},savedEdits=flowEdits) {
+  disposeFlowPreviews();flowStates=states;
+  const sourceKey=state=>JSON.stringify([state.name,state.condition,state.errors]);
+  const old=new Map((savedEdits||[]).map(edit=>[edit.sourceKey,edit]));
+  flowEdits=states.map(state=>old.get(sourceKey(state))||{sourceKey:sourceKey(state),name:state.name,condition:state.condition,values:{...state.values},errorTexts:state.errors.map(error=>error.text)});
+  flowSelection=states.map(state=>({included:flowDecisions.get(JSON.stringify([state.name,state.condition]))??true,errors:state.errors.map(error=>flowDecisions.get(JSON.stringify([error.field,error.text]))??true)}));
   $('flowChoices').replaceChildren();
-  states.forEach((state, i) => {
-    const edit=flowEdits[i];
-    const card=document.createElement('section');card.className='state-card';
-    const heading=document.createElement('h3');heading.textContent=(i+1)+'. '+edit.name;
-    card.appendChild(heading);
-    const grid=document.createElement('div');grid.className='state-grid';
-    const content=document.createElement('div');
-    const preview=document.createElement('div');preview.className='state-preview';
-    const previewText=document.createElement('p');previewText.className='hint';previewText.textContent='Превью на основе закреплённого фрейма';
-    const previewButton=document.createElement('button');previewButton.type='button';previewButton.textContent='Показать превью';
-    const imageArea=document.createElement('div');
-    preview.append(previewText,previewButton,imageArea);grid.append(content,preview);card.appendChild(grid);
-    const view={area:imageArea,note:previewText,button:previewButton,token:0};flowPreviewViews.set(i,view);
-    function changed() {
-      flowApproved=false;
-      view.token=++flowPreviewSequence;
-      if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
-      imageArea.replaceChildren();previewText.textContent='Тексты или выбор изменены. Обновите превью.';
-      previewButton.textContent='Обновить превью';
-      post('invalidateFlow');scheduleSessionSave();setBusy(false);
+  states.forEach((state,i)=>{
+    const edit=flowEdits[i],card=document.createElement('section');card.className='state-card';
+    const heading=document.createElement('h3');heading.textContent=(i+1)+'. '+edit.name;card.appendChild(heading);
+    const affected=[...new Set([...Object.keys(state.values),...(state.variants||[]).map(v=>v.field),...(state.properties||[]).map(p=>p.field),...state.errors.map(e=>e.field).filter(Boolean)])];
+    for(const id of affected){
+      const field=flowFields.find(field=>field.field===id);
+      const row=document.createElement('div');row.className='state-component';
+      const type=document.createElement('small');type.textContent=field?.component||'Компонент';
+      const label=document.createElement('span');label.textContent=labels[id]||field?.label||id;row.append(type,label);card.appendChild(row);
     }
-    function editable(title,value,write,multiline=false) {
-      const label=document.createElement('label');label.textContent=title;
-      const input=document.createElement(multiline?'textarea':'input');input.value=value;input.maxLength=3000;
-      input.oninput=()=>{write(input.value);changed();};label.appendChild(input);content.appendChild(label);
-    }
-    function toggle(parent,key,read,write,title) {
-      const button=document.createElement('button');button.type='button';
-      const refresh=()=>{button.textContent=read()?'+ Берём':'− Не берём';button.setAttribute('aria-pressed',String(read()));button.setAttribute('aria-label',title+': '+button.textContent);};
-      button.onclick=()=>{write(!read());flowDecisions.set(key,read());refresh();changed();};refresh();parent.appendChild(button);
-    }
-    toggle(content,stateKey(state),()=>flowSelection[i].included,value=>{flowSelection[i].included=value;},state.name);
+    if(!affected.length){const note=document.createElement('p');note.className='hint';note.textContent='Состояние формы';card.appendChild(note);}
+    const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Тексты и свойства';details.appendChild(summary);card.appendChild(details);
+    function changed(){flowApproved=false;hasFlowDraft=flowStates.length>0;view.token=++flowPreviewSequence;if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}view.area.replaceChildren();view.note.textContent='Настройки изменены. Откройте превью заново.';post('invalidateFlow');scheduleSessionSave();setBusy(false);}
+    function editable(title,value,write){const label=document.createElement('label');label.textContent=title;const input=document.createElement('textarea');input.maxLength=3000;input.value=value;input.oninput=()=>{write(input.value);changed();};label.appendChild(input);details.appendChild(label);}
+    const take=document.createElement('label');take.className='state-include';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=flowSelection[i].included;checkbox.onchange=()=>{flowSelection[i].included=checkbox.checked;flowDecisions.set(JSON.stringify([state.name,state.condition]),checkbox.checked);changed();};take.append(checkbox,document.createTextNode('Включить состояние'));details.appendChild(take);
     editable('Название состояния',edit.name,value=>{edit.name=value;heading.textContent=(i+1)+'. '+value;});
-    editable('Когда показать',edit.condition,value=>{edit.condition=value;},true);
-    const summary=document.createElement('p');summary.className='hint';
-    const affected=[...new Set([...Object.keys(state.values),...(state.variants||[]).map(v=>v.field),...state.errors.map(error=>error.field)])];
-    summary.textContent='Что добавим: копию экрана с изменениями для '+(affected.length?affected.map(id=>labels[id]||id||'формы').join(', '):'состояния формы')+'. Остальная компоновка сохранится.';content.appendChild(summary);
-    for(const [id,value] of Object.entries(edit.values)) editable('Значение · '+(labels[id]||id)+' (можно оставить пустым)',value,text=>{edit.values[id]=text;});
-    state.errors.forEach((error,j)=>{
-      editable('Текст ошибки · '+(labels[error.field]||error.field||'Форма'),edit.errorTexts[j],text=>{edit.errorTexts[j]=text;},true);
-      toggle(content,errorKey(error),()=>flowSelection[i].errors[j],value=>{flowSelection[i].errors[j]=value;},error.text);
-    });
-    if(state.variants?.length) {
-      const details=document.createElement('details');const title=document.createElement('summary');title.textContent='Варианты компонентов';details.appendChild(title);
-      for(const variant of state.variants){const p=document.createElement('p');p.className='hint';p.textContent=(labels[variant.field]||variant.field)+' → '+variant.variant;details.appendChild(p);}content.appendChild(details);
-    }
-    previewButton.onclick=()=>{
-      if(busy||historyReadOnly)return;
-      if(!flowSelection[i].included){previewText.textContent='Состояние исключено. Включите его для превью.';return;}
-      view.token=++flowPreviewSequence;previewText.textContent='Готовлю превью в Pixso…';
-      post('previewFlowState',{index:i,previewId:view.token,edits:flowEdits,selection:flowSelection});
-    };
+    editable('Когда показать',edit.condition,value=>edit.condition=value);
+    for(const [id,value] of Object.entries(edit.values))editable('Значение · '+(labels[id]||id),value,text=>edit.values[id]=text);
+    state.errors.forEach((error,j)=>editable('Текст ошибки · '+(labels[error.field]||'Форма'),edit.errorTexts[j],text=>edit.errorTexts[j]=text));
+    const preview=document.createElement('div');preview.className='state-preview';
+    const note=document.createElement('p');note.className='hint';note.textContent='Превью выбранного состояния';
+    const button=document.createElement('button');button.type='button';button.textContent='Показать превью';
+    const area=document.createElement('div');preview.append(note,button,area);details.appendChild(preview);
+    const view={area,note,button,token:0};flowPreviewViews.set(i,view);
+    button.onclick=()=>{if(busy||historyReadOnly||!flowSelection[i].included)return;view.token=++flowPreviewSequence;note.textContent='Готовлю превью…';post('previewFlowState',{index:i,previewId:view.token,edits:flowEdits,selection:flowSelection});};
     $('flowChoices').appendChild(card);
   });
 }
@@ -892,18 +903,22 @@ window.addEventListener('message', async event => {
       setBusy(false);
       return;
     case 'flowRequest':
+      lastModelRequest={prompt:message.prompt,responseType:'reviewFlow'};
       try {
         post('reviewFlow', { raw: await requestModel(message.prompt) });
         return;
       } catch (error) {
         status(error.message, true);
-        finishPending(error.message);
+        $('flowChat').querySelector('[data-flow-pending]')?.remove();addMessage('flowChat','GigaCode',error.message);
       }
       break;
     case 'flowPreview':
       showFlowPreview(message);
       return;
     case 'flowProposal':
+      lastRequest=lastModelRequest=undefined;layoutLocked=true;
+      $('flowChat').querySelector('[data-flow-pending]')?.remove();
+      flowFields=message.fields||flowFields;
       hasFlowResponse = true;
       $('feedback').value = '';
       hasFlowDraft = message.states.length > 0;
@@ -924,9 +939,11 @@ window.addEventListener('message', async event => {
       break;
     case 'flowApproved':
       flowApproved = true;
+      if(creatingApprovedStates){post('createStates');return;}
       status('Состояния и тексты ошибок утверждены.');
       break;
     case 'statesCreated':
+      creatingApprovedStates=false;
       flowApproved = false;
       hasFlowDraft = false;
       status('Создано фреймов: ' + message.count + (message.skipped ? ' · Не удалось заполнить значений: ' + message.skipped : '') +
@@ -1028,6 +1045,8 @@ window.addEventListener('message', async event => {
       hasSource = true;
       layoutLocked = false;
       stage = 'done';
+      statesExpanded=false;stateMode='';clearFlow();
+      if(message.items)renderProposal(message.items);
       addMessage('componentChat', 'Плагин', 'Добавлено компонентов: ' + message.count + ' · ' + message.target);
       status('');
       break;
@@ -1043,6 +1062,7 @@ window.addEventListener('message', async event => {
       status('LightBox ' + message.size + ' поставлен.');
       break;
     case 'error':
+      creatingApprovedStates=false;$('flowChat').querySelector('[data-flow-pending]')?.remove();
       if (!$('plan').hidden) addMessage('componentChat', 'Плагин', message.message);
       clearTimeout(placementTimer);
       placementTimer = undefined;

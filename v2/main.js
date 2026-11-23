@@ -1360,11 +1360,60 @@ function confirmedFlowFields(source) {
     const doc=componentKnowledge({name});
     return { field:id,label,component:name,purpose:doc?.use || 'Назначение не сопоставлено',
       confirmed:approved ? {text:approved.text,value:approved.value,placeholder:approved.placeholder,readOnly:approved.readOnly,optionExample:approved.optionExample} : undefined,
-      width:node.width,height:node.height,properties:node.componentProperties,
+      width:node.width,height:node.height,properties:node.componentProperties,stateCapabilities:componentStateCapabilities(node),
       currentVariant:node.mainComponent?.name,
       variants:Array.from(node.mainComponent?.parent?.type==='COMPONENT_SET'?node.mainComponent.parent.children:[]).filter(n=>n.type==='COMPONENT').map(n=>n.name) };
   });
 }
+const stateRolePatterns = {
+  value: /^(?:value|input[ _-]?value|значение|text|content)(?:#|$)/i,
+  description: /^(?:description|(?:form[ _-]?)?field[ _-]?description|helper[ _-]?text|supporting[ _-]?text|описание|подсказка)(?:#|$)/i,
+  error: /^(?:error(?:[ _-]?(?:text|message))?|validation(?:[ _-]?message)?|ошибка|текст ошибки)(?:#|$)/i
+};
+function availableStateVariants(node) {
+  const current = node.mainComponent;
+  return current?.parent?.type === 'COMPONENT_SET' ? Array.from(current.parent.children).filter(child => child.type === 'COMPONENT') : [];
+}
+function compatibleStateVariant(node, candidate) {
+  const dimensions = name => new Map(String(name || '').split(',').map(part=>part.split('=').map(text=>text.trim())).filter(pair=>pair.length===2));
+  const current=dimensions(node.mainComponent?.name), next=dimensions(candidate.name);
+  for(const [axis,value] of current) {
+    if(/state|status|focus|active|open|expand|error|hover|состояни|ошиб/i.test(axis))continue;
+    if(next.get(axis)!==value)return false;
+  }
+  return true;
+}
+function componentStateCapabilities(node) {
+  const properties=Object.entries(node.componentProperties || {});
+  const matching=pattern=>properties.filter(([key,prop])=>prop.type==='BOOLEAN'&&pattern.test(key)).map(([key])=>key);
+  return {
+    opened:matching(/^(?:is[ _-]?)?(?:open(?:ed)?|expanded|show[ _-]?(?:dropdown|options)|раскрыт)(?:#|$)/i),
+    active:matching(/^(?:is[ _-]?)?(?:active|focused?|typing|активн[^#]*|фокус)(?:#|$)/i),
+    error:matching(/^(?!(?:hide|no|not|without|disable))[^#]*(?:error|invalid|ошиб)/i),
+    description:properties.filter(([key,prop])=>prop.type==='TEXT'&&stateRolePatterns.description.test(key)).map(([key])=>key),
+    variants:availableStateVariants(node).filter(variant=>compatibleStateVariant(node,variant)).map(variant=>variant.name)
+  };
+}
+async function requestStates(message) {
+  const mode=message.mode;
+  const analytics=typeof message.analytics==='string'?message.analytics.trim():'';
+  if(!['auto','analytics'].includes(mode))throw new Error('Выберите сценарий состояний.');
+  if(mode==='analytics' && !analytics)throw new Error('Добавьте описание аналитики.');
+  if(analytics.length>12000)throw new Error('Сократите аналитику до 12000 символов.');
+  if(!approvedSource)throw new Error('Сначала поставьте компоненты на макет.');
+  const requirements=approvedSource.task || message.requirements;
+  if(typeof requirements!=='string'||!requirements.trim())throw new Error('Добавьте описание бизнес-задачи.');
+  const source=getActiveForm(approvedSource.frameId);
+  const signature=layoutSignature(source);
+  if(approvedSource.signature!==signature) {
+    approvedSource.signature=signature;source.locked=true;
+    flow=null;invalidateFlow();
+  }
+  lockedSource();
+  if(flow && (flow.mode!==mode || flow.analytics!==analytics)) {flow=null;invalidateFlow();}
+  requestFlow({...message,mode,analytics:mode==='analytics'?analytics:'',requirements,standard:approvedSource.standard || message.standard || '',feedback:message.feedback || ''});
+}
+
 function flowStateKey(state) { return JSON.stringify([state.name,state.condition,state.errors]); }
 function editedFlowStates(edits) {
   if (edits===undefined) return flow.states;
@@ -1390,7 +1439,7 @@ async function previewFlowState({ index, edits, selection, previewId }) {
     const state=selectFlow(isolated,states)[0];
     if (!state) throw new Error('Состояние исключено. Включите его для превью.');
     copy=source.clone();copy.locked=false;copy.x=source.x+source.width+48;copy.y=source.y;
-    const result=applyStateToCopy(copy,state,source);
+    const result=await applyStateToCopy(copy,state,source);
     if(typeof copy.exportAsync!=='function')throw new Error('Pixso не поддерживает экспорт превью.');
     await yieldToEditor();
     const png=await copy.exportAsync(previewExportSettings(copy));
@@ -1400,33 +1449,93 @@ async function previewFlowState({ index, edits, selection, previewId }) {
   finally {if(copy&&!copy.removed)copy.remove();}
 }
 
-function requestFlow({ requirements, feedback, standard, selection, edits }) {
+function requestFlow({ requirements, feedback, standard, selection, edits, mode = "auto", analytics = "" }) {
   const source = lockedSource();
   if (typeof requirements !== 'string' || !requirements.trim()) throw new Error('Вставьте бизнес-требования.');
   if (requirements.length > 12000 || typeof standard !== 'string' || standard.length > 8000 ||
       typeof feedback !== 'string' || feedback.length > 2000) throw new Error('Сократите входной текст.');
-  const context = { requirements: requirements.trim(), standard: standard.trim() };
+  const context = { requirements: requirements.trim(), standard: standard.trim(), mode, analytics, feedback };
   pendingFlow = context;
   flowApproved = false;
   send('flowRequest', { prompt: [
-    'Предложи состояния и ошибки для уже сверстанной формы. Не меняй состав компонентов.',
+    'Предложи состояния взаимодействия и ошибки для уже собранной формы. Не меняй состав компонентов.',
+    'Обязательно проверь раскрытый Select/Multiselect/Suggest и активное печатание TextField/MaskedField/AmountField/NumberField: фокус/active плюс пример values. Добавляй только применимые реальные variants или BOOLEAN properties. Не имитируй раскрытие изменением текста.',
+    'В режиме analytics правила и точные тексты из analytics имеют приоритет. Не добавляй выдуманные бизнес-ошибки; стандартные состояния взаимодействия допустимы. В auto предложи релевантные ошибки сам; неподтвержденные правила отметь как гипотезы.',
+    'Triplex: TextFieldBase содержит FormField (active/status) и отдельный FormFieldDescription. Текст ошибки обычно записывается в Description, а error/status включается отдельно. React props не равны свойствам Pixso: используй только реальные поля properties/variants/stateCapabilities.',
     'Проверь применимость: пустое обязательное поле, формат, диапазон, зависимости полей, недоступные данные, сеть, сервер, загрузка, успех, disabled и read-only. Не ограничивайся одной ошибкой. Неподтвержденные бизнес-правила помечай в condition как гипотезы для согласования; не выдумывай числовые ограничения.',
     'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
-    'Верни только JSON: {"reply":"Объяснение","states":[{"name":"Название","condition":"Когда показать","values":{"field-id":"значение"},"variants":[{"field":"field-id","variant":"точное имя доступного варианта"}],"errors":[{"field":"field-id или пустая строка для формы","text":"Текст ошибки"}]}]}.',
-    'Дай до 24 релевантных состояний. values, variants и errors могут быть пустыми. Используй только field из fields и варианты из variants. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
+    'Верни только JSON: {"reply":"Объяснение","states":[{"name":"Название","condition":"Когда показать","values":{"field-id":"значение"},"variants":[{"field":"field-id","variant":"точное имя доступного варианта"}],"properties":[{"field":"field-id","values":{"точный ключ BOOLEAN/TEXT из properties":true}}],"errors":[{"field":"field-id или пустая строка для формы","text":"Текст ошибки"}]}]}.',
+    'Дай до 24 релевантных состояний. properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields и варианты из variants. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
     'fields — фактически подтверждённые компоненты с холста, их назначение, текущие свойства и доступные варианты. confirmedTask и decisions — исходная задача и решения пользователя. Следуй им; не возвращай удалённые или заменённые компоненты.',
     'Не предлагай ввод для компонента отображения Amount/Text. Учитывай поведение компонента: не предлагай невозможные действия (например ввод букв, если поле их отфильтровывает). Не меняй размер или тему ради ошибки. Используй только точные варианты из fields.',
-    'В reply максимум два коротких предложения о предложениях. Не пересказывай устройство формы и каталог. Для каждого состояния дай понятные name и condition, конкретные values и точные тексты errors. Не делай выводов об отсутствии компонентов во всей дизайн-системе по ограниченной справке.',
+    'Если раскрытие/active отсутствуют и в variants и в BOOLEAN properties, не включай их в states, а явно объясни ограничение в reply. В reply максимум два коротких предложения о предложениях. Не пересказывай устройство формы и каталог. Для каждого состояния дай понятные name и condition, конкретные values и точные тексты errors. Не делай выводов об отсутствии компонентов во всей дизайн-системе по ограниченной справке.',
     JSON.stringify({ ...context, confirmedTask:approvedSource?.task || requirements, decisions:approvedSource?.decisions || modelConversation(), fields:confirmedFlowFields(source),
       previous:flow ? editedFlowStates(edits) : undefined,selection,feedback })
   ].join('\n') });
+}
+
+function variantMatchesState(name,role) {
+  const patterns={opened:/(?:^|[ ,=/])(?:open(?:ed)?|expanded|раскрыт[^,=]*)(?=$|[ ,=/])/i,active:/(?:^|[ ,=/])(?:active|focus(?:ed)?|typing|активн[^,=]*|фокус)(?=$|[ ,=/])/i,error:/(?:^|[ ,=/])(?:error|invalid|ошиб[^,=]*)(?=$|[ ,=/])/i};
+  if(/(?:open(?:ed)?|expanded|active|focus(?:ed)?|error|invalid)\s*=\s*(?:false|off|no|closed|inactive|0)/i.test(name))return false;
+  return patterns[role].test(name);
+}
+function stateControl(node,role) {
+  const capabilities=componentStateCapabilities(node);
+  if(role!=='error'&&capabilities[role]?.length===1)return {properties:[{field:node.getPluginData('triplex-field-id'),values:{[capabilities[role][0]]:true}}]};
+  const choices=capabilities.variants.filter(name=>variantMatchesState(name,role));
+  if(choices.length===1)return {variants:[{field:node.getPluginData('triplex-field-id'),variant:choices[0]}]};
+  if(role==='error'&&capabilities.error.length===1)return {properties:[{field:node.getPluginData('triplex-field-id'),values:{[capabilities.error[0]]:true}}]};
+}
+function completeInteractionStates(plan,nodes) {
+  const missing=[];
+  // Set the error status separately from the Description text, when unambiguous.
+  for(const state of plan.states)for(const id of new Set(state.errors.map(error=>error.field).filter(Boolean))) {
+    const node=nodes.get(id);
+    if((state.variants||[]).some(choice=>choice.field===id)||(state.properties||[]).some(patch=>patch.field===id&&Object.keys(patch.values||{}).some(key=>/error|invalid|ошиб/i.test(key))))continue;
+    const control=stateControl(node,'error');
+    if(control?.variants)state.variants=[...(state.variants||[]),...control.variants];
+    if(control?.properties){
+      state.properties=state.properties||[];
+      const patch=state.properties.find(patch=>patch.field===id);
+      if(patch)patch.values={...patch.values,...control.properties[0].values};else state.properties.push(...control.properties);
+    }
+  }
+  for(const [id,node] of nodes) {
+    const name=node.getPluginData('triplex-component-name')||node.mainComponent?.parent?.name||node.name||'';
+    const doc=componentKnowledge({name})?.name||name;
+    const role=/select|suggest/i.test(doc)?'opened':/(?:text|masked|amount|number|textarea)field/i.test(doc)?'active':null;
+    if(!role||isReadOnly(node.mainComponent?.name||''))continue;
+    const label=node.getPluginData('triplex-field-label')||name;
+    const control=stateControl(node,role);
+    if(!control){missing.push(label+' — '+(role==='opened'?'раскрытие':'активное состояние'));continue;}
+    const covered=plan.states.some(state=>(state.variants||[]).some(choice=>choice.field===id&&variantMatchesState(choice.variant,role)) || (state.properties||[]).some(patch=>patch.field===id&&Object.entries(patch.values).some(([key,value])=>componentStateCapabilities(node)[role].includes(key)&&value===true)));
+    if(!covered){
+      const valueProp=Object.entries(node.componentProperties||{}).find(([key,prop])=>prop.type==='TEXT'&&stateRolePatterns.value.test(key));
+      const example=valueProp?(String(valueProp[1].value||'')||(/number|amount/i.test(doc)?'10':/masked/i.test(doc)?'':'Пример ввода')):'';
+      plan.states.push({name:(role==='opened'?'Раскрытый вариант':'Активное печатание')+' · '+label,condition:role==='opened'?'Пользователь раскрывает список':'Пользователь устанавливает фокус и вводит значение',values:role==='active'&&valueProp?{[id]:example}:{},errors:[],...control});
+    }
+  }
+  if(missing.length)plan.reply+=' Недоступны в подключённой библиотеке: '+missing.join('; ')+'.';
+}
+
+function requestFlowRepair(message,error) {
+  if(message?.type!=='reviewFlow'||!pendingFlow||pendingFlow.repairAttempted)return false;
+  const source=lockedSource();pendingFlow.repairAttempted=true;
+  send('flowRequest',{repairing:true,prompt:[
+    'Исправь ответ о состояниях формы. Верни только JSON {reply,states:[{name,condition,values:{},variants:[],properties:[],errors:[]}]}.',
+    'Ошибка проверки: '+(error.message||String(error)),
+    'Используй только реальные field, точные variants и свойства BOOLEAN/TEXT из fields. Не меняй размер/тему. Description содержит текст ошибки; отдельно нужен доступный error-variant/BOOLEAN. Раскрытие и активность допустимы только при доступном свойстве/варианте. Если реализация недоступна, объясни это в reply, не имитируй её пустой копией.',
+    JSON.stringify({...pendingFlow,confirmedTask:approvedSource.task,fields:confirmedFlowFields(source),invalidResponse:typeof message.raw==='string'?message.raw.slice(0,12000):''})
+  ].join('\n')});
+  return true;
 }
 
 function reviewFlow({ raw }) {
   const source = lockedSource();
   if (!pendingFlow || typeof raw !== 'string' || raw.length > 40000) throw new Error('Некорректный ответ GigaCode.');
   const plan = parseModelResponse(raw);
-  const ids = new Set(sourceFields(source).map(n => n.getPluginData('triplex-field-id')));
+  const nodes = new Map(sourceFields(source).map(node=>[node.getPluginData('triplex-field-id'),node]));
+  const ids = new Set(nodes.keys());
   if (typeof plan?.reply !== 'string' || !Array.isArray(plan.states) || plan.states.length > 24 ||
       plan.states.some(state => typeof state?.name !== 'string' || !state.name.trim() ||
         typeof state.condition !== 'string' || !state.values || typeof state.values !== 'object' ||
@@ -1434,9 +1543,36 @@ function reviewFlow({ raw }) {
         (state.variants !== undefined && (!Array.isArray(state.variants) || state.variants.some(v => !ids.has(v.field) || typeof v.variant !== 'string'))) ||
         !Array.isArray(state.errors) || state.errors.some(error => typeof error?.field !== 'string' || (error.field && !ids.has(error.field)) ||
           typeof error.text !== 'string' || !error.text.trim()))) throw new Error('GigaCode вернул некорректный план сценария.');
+  completeInteractionStates(plan,nodes);
+  for(const state of plan.states) validateStateBindings(state,nodes);
   flow = { ...pendingFlow, states: plan.states, reply: plan.reply };
   pendingFlow = null;
-  send('flowProposal', { reply: plan.reply, states: plan.states, labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
+  send('flowProposal', { reply: plan.reply, states: plan.states, mode:flow.mode, analytics:flow.analytics, fields:confirmedFlowFields(source), labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
+}
+
+function validateStateBindings(state,nodes) {
+  if(!Object.keys(state.values).length&&!state.errors.length&&!state.variants?.length&&!state.properties?.length)throw new Error('Состояние «'+state.name+'» не содержит применимых свойств или вариантов.');
+  const variants=new Map();
+  for(const choice of state.variants || []) {
+    if(variants.has(choice.field))throw new Error('Для компонента переданы несколько вариантов одного состояния.');
+    const node=nodes.get(choice.field);
+    const variant=availableStateVariants(node).find(candidate=>candidate.name===choice.variant);
+    if(!variant||!compatibleStateVariant(node,variant))throw new Error('Недоступен вариант состояния «'+choice.variant+'». Размер и тему менять нельзя.');
+    variants.set(choice.field,variant);
+  }
+  if(state.properties!==undefined&&!Array.isArray(state.properties))throw new Error('Некорректные свойства состояния.');
+  const seen=new Set();
+  for(const patch of state.properties || []) {
+    const node=nodes.get(patch?.field);
+    if(!node||seen.has(patch.field)||!patch.values||typeof patch.values!=='object'||Array.isArray(patch.values))throw new Error('Некорректные свойства состояния.');
+    seen.add(patch.field);
+    const variant=variants.get(patch.field);
+    const definitions=variant ? new Map(editableProperties(variant)) : new Map(Object.entries(node.componentProperties||{}));
+    for(const [key,value] of Object.entries(patch.values)) {
+      const type=definitions.get(key)?.type;
+      if(type==='BOOLEAN'?typeof value!=='boolean':type!=='TEXT'||typeof value!=='string'||value.length>3000)throw new Error('Свойство состояния «'+key+'» недоступно.');
+    }
+  }
 }
 
 function selectFlow(selection, states = flow.states) {
@@ -1449,15 +1585,17 @@ function selectFlow(selection, states = flow.states) {
     // A rejected error must not leave its error variant in the generated screen.
     if (state.errors.length && !errors.length) return [];
     const rejected = new Set(state.errors.filter((_, j) => !choice.errors[j]).map(e => e.field));
-    return [{ ...state, errors, variants: (state.variants || []).filter(v => !rejected.has(v.field)) }];
+    return [{ ...state, errors, variants: (state.variants || []).filter(v => !rejected.has(v.field)), properties:(state.properties || []).filter(patch=>!rejected.has(patch.field)) }];
   });
 }
 
-function applyStateToCopy(copy,state,source) {
+async function applyStateToCopy(copy,state,source) {
   let skipped=0;
   let errorsPending=0;
   const fields = new Map(sourceFields(copy).map(n => [n.getPluginData('triplex-field-id'), n]));
   const sizes = [...fields.values()].map(n => [n, n.width, n.height]);
+  const expandedFields=new Set((state.variants||[]).filter(choice=>variantMatchesState(choice.variant,'opened')).map(choice=>choice.field));
+  for(const patch of state.properties||[])if(Object.entries(patch.values).some(([key,value])=>value===true&&componentStateCapabilities(fields.get(patch.field)).opened.includes(key)))expandedFields.add(patch.field);
   for (const choice of state.variants || []) {
     const field = fields.get(choice.field);
     const current = field?.mainComponent;
@@ -1468,28 +1606,73 @@ function applyStateToCopy(copy,state,source) {
     const compatible = Object.fromEntries(Object.entries(values).filter(([key, prop]) => ['TEXT', 'BOOLEAN'].includes(prop.type) && field.componentProperties?.[key]?.type === prop.type).map(([key, prop]) => [key, prop.value]));
     if (Object.keys(compatible).length) field.setProperties(compatible);
   }
+  for(const patch of state.properties || []) {
+    const field=fields.get(patch.field);
+    if(!field)throw new Error('Компонент состояния больше не доступен.');
+    await setInstanceValues(field,patch.values,field.name || patch.field);
+  }
   for (const [id, value] of Object.entries(state.values)) {
-    const field = fields.get(id);
-    const key = Object.entries(field?.componentProperties || {}).find(([name, prop]) => /^(?:value|input[ _-]?value|значение)(?:#|$)/i.test(name) && prop.type === 'TEXT')?.[0];
-    if (key) field.setProperties({ [key]: value });
-    else skipped++;
+    if(!await writeStateText(fields.get(id),'value',value)) skipped++;
   }
   const annotations = [state.condition];
-  for (const error of state.errors) {
-    const field = fields.get(error.field);
-    const props = Object.entries(field?.componentProperties || {});
-    const key = props.find(([name, prop]) => /error|validation|ошиб/i.test(name) && prop.type === 'TEXT')?.[0];
-    if (key) {
-      const values = { [key]: error.text };
-      for (const [name, prop] of props) if (prop.type === 'BOOLEAN' && /error|ошиб/i.test(name)) values[name] = true;
-      field.setProperties(values);
-    } else errorsPending++;
-    annotations.push((field?.getPluginData('triplex-field-label') || 'Форма') + ' — ' + error.text);
+  const errorsByField=new Map();
+  for(const error of state.errors) {
+    const messages=errorsByField.get(error.field)||[];messages.push(error.text);errorsByField.set(error.field,messages);
   }
-  for (const [node, width, height] of sizes) node.resizeWithoutConstraints(width, height);
+  for (const [id,messages] of errorsByField) {
+    const field=fields.get(id);
+    const text=messages.join('\n');
+    if(field) {
+      const props=Object.entries(field.componentProperties || {});
+      const toggles=Object.fromEntries(props.filter(([name,prop])=>prop.type==='BOOLEAN'&&!/^(?:hide|no|not|without|disable)/i.test(name)&&(/error|invalid|ошиб|show[ _-]?(?:description|helper)|description[ _-]?(?:visible|enabled)/i.test(name)||stateRolePatterns.description.test(name))).map(([name])=>[name,true]));
+      if(Object.keys(toggles).length)field.setProperties(toggles);
+    }
+    if(!await writeStateText(field,'error',text))errorsPending+=messages.length;
+    annotations.push((field?.getPluginData('triplex-field-label') || 'Форма') + ' — ' + text);
+  }
+  for (const [node, width, height] of sizes) node.resizeWithoutConstraints(width,expandedFields.has(node.getPluginData('triplex-field-id'))?Math.max(height,node.height):height);
+  if(expandedFields.size)copy.clipsContent=false;
   copy.resizeWithoutConstraints(source.width, source.height);
   copy.setPluginData('triplex-flow-errors', JSON.stringify(state.errors));
   return {skipped,errorsPending,annotations};
+}
+
+async function writeStateText(field,role,value) {
+  if(!field)return false;
+  const patterns=role==='error'?[stateRolePatterns.description,stateRolePatterns.error]:[stateRolePatterns.value];
+  const props=Object.entries(field.componentProperties || {});
+  for(const pattern of patterns) {
+    const matches=props.filter(([name,prop])=>prop.type==='TEXT'&&pattern.test(name));
+    if(matches.length===1){await setInstanceValues(field,{[matches[0][0]]:value},field.name || role);return true;}
+    if(matches.length>1)return false;
+  }
+  // Some Pixso libraries expose Description only as a nested TEXT layer.
+  // Change only an unambiguous semantic layer inside the cloned instance.
+  for(const pattern of patterns) {
+    const direct=[],grouped=[];const stack=[{node:field,parents:[]}];let visited=0;
+    while(stack.length) {
+      const {node,parents}=stack.pop();
+      if(node.type==='TEXT') {
+        const match={node,parents};
+        if(pattern.test(node.name || ''))direct.push(match);
+        else if(parents.some(parent=>pattern.test(parent.name || '')))grouped.push(match);
+      }
+      for(const child of node.children || [])stack.push({node:child,parents:[...parents,node]});
+      if(direct.length>1)break;
+      if(++visited%100===0)await yieldToEditor();
+    }
+    const matches=direct.length?direct:grouped;
+    if(matches.length===1){
+      const {node,parents}=matches[0];
+      await setTextLayerValue(node,value);
+      node.visible=true;
+      for(const parent of parents)if(pattern.test(parent.name || ''))parent.visible=true;
+      return true;
+    }
+    if(matches.length>1)return false;
+  }
+
+  return false;
 }
 
 async function createStates() {
@@ -1507,7 +1690,7 @@ async function createStates() {
       copy.name = String(index + 2).padStart(2, '0') + ' · ' + state.name;
       copy.x = source.x + (index + 1) * (source.width + 48);
       copy.y = source.y;
-      const rendered=applyStateToCopy(copy,state,source);
+      const rendered=await applyStateToCopy(copy,state,source);
       skipped+=rendered.skipped; errorsPending+=rendered.errorsPending;
       const annotations=rendered.annotations;
       await pixso.loadFontAsync({ family: 'Inter', style: 'Regular' });
@@ -2472,23 +2655,23 @@ async function setInstanceValues(instance, values, name, progress = () => {}) {
       throw new Error('Вложенная подпись недоступна в «' + name + '».');
     }
     if (layer.characters === value) continue;
-    let fonts = typeof layer.getRangeAllFontNames === 'function' && layer.characters.length
-      ? layer.getRangeAllFontNames(0, layer.characters.length) : [layer.fontName];
-    if (!fonts.every(font => font && typeof font.family === 'string')) {
-      fonts = (layer.textStyles || []).map(range => range.textStyle?.fontName).filter(Boolean);
-    }
-    if (!fonts.length) throw new Error('Не удалось определить шрифт вложенной подписи.');
-    for (const font of fonts) {
-      const key = JSON.stringify(font);
-      if (loadedFonts.has(key)) continue;
-      progress('Загружаю шрифт ' + font.family + ' ' + font.style);
-      await pixso.loadFontAsync(font);
-      if (instance.removed) throw new Error('Подготовка превью отменена.');
-      loadedFonts.add(key);
-    }
-    layer.characters = value;
-    if (layer.characters !== value) throw new Error('Pixso не применил текст вложенной подписи в «' + name + '».');
+    await setTextLayerValue(layer,value,progress,()=>instance.removed);
+
   }
+}
+
+async function setTextLayerValue(layer,value,progress=()=>{},cancelled=()=>false) {
+  if(layer.characters===value)return;
+  let fonts=typeof layer.getRangeAllFontNames==='function'&&layer.characters.length ? layer.getRangeAllFontNames(0,layer.characters.length) : [layer.fontName];
+  if(!fonts.every(font=>font&&typeof font.family==='string'))fonts=(layer.textStyles||[]).map(range=>range.textStyle?.fontName).filter(Boolean);
+  if(!fonts.length)throw new Error('Не удалось определить шрифт текстового слоя.');
+  for(const font of fonts) {
+    const key=JSON.stringify(font);
+    if(!loadedFonts.has(key)) {progress('Загружаю шрифт '+font.family+' '+font.style);await pixso.loadFontAsync(font);loadedFonts.add(key);}
+    if(cancelled())throw new Error('Подготовка превью отменена.');
+  }
+  layer.characters=value;
+  if(layer.characters!==value)throw new Error('Pixso не применил текст слоя «'+layer.name+'».');
 }
 
 // Cache only successful exports; no Pixso nodes survive an export.
@@ -2625,7 +2808,7 @@ async function apply() {
   flow = null;
   pendingFlow = null;
   flowApproved = false;
-  send('applied', { count: inserted.length, target: body.name });
+  send('applied', { count: inserted.length, target: body.name, items:context.items.map(item=>({uid:item.uid,name:item.name,text:item.text})) });
 }
 
 let messageQueue = Promise.resolve();
@@ -2716,6 +2899,7 @@ const commandHandlers = new Map(Object.entries({
   lockLayout,
   unlockLayout,
   requestFlow,
+  requestStates,
   reviewFlow,
   invalidateFlow,
   approveFlow,
@@ -2766,7 +2950,7 @@ const commandErrorStages = new Map([
 function reportCommandError(message, error, allowRepair = true) {
   if (allowRepair) {
     try {
-      if (requestLabelRepair(message, error)) return;
+      if (requestFlowRepair(message,error) || requestLabelRepair(message, error)) return;
     } catch (repairError) { error = repairError; }
   }
   const stage = commandErrorStages.get(message?.type);
@@ -2827,8 +3011,8 @@ function sessionState() {
 }
 function cleanSessionUI(value) {
   const result = {};
-  for (const key of ['task','standard','feedback','revision','size']) if (typeof value?.[key] === 'string') result[key] = value[key];
-  for (const key of ['hasFlowDraft','hasFlowResponse']) result[key] = value?.[key] === true;
+  for (const key of ['task','standard','feedback','revision','size','stateMode','analytics']) if (typeof value?.[key] === 'string') result[key] = value[key];
+  for (const key of ['hasFlowDraft','hasFlowResponse','statesExpanded']) result[key] = value?.[key] === true;
   result.flowDecisions = Array.isArray(value?.flowDecisions) ? value.flowDecisions.filter(pair => Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'boolean') : [];
   if (value?.draft && Number.isInteger(value.draft.index) && Number.isInteger(value.draft.variant)) {
     const values=Object.fromEntries(Object.entries(value.draft.values||{}).filter(([,v])=>typeof v==='string'||typeof v==='boolean'));
@@ -2927,13 +3111,15 @@ async function restoreSession(id) {
   if (!warning && approvedSource?.signature && layoutSignature(getActiveForm(activeFormId))!==approvedSource.signature) {
     delete approvedSource.signature; flowApproved=false;
     getActiveForm(activeFormId).locked=false;
-    warning='Макет изменился после сохранения. Перед созданием состояний закрепите верстку повторно.';
+    flow=null;sessionUI.hasFlowResponse=false;sessionUI.hasFlowDraft=false;sessionUI.flowEdits=[];sessionUI.stateMode='';
+    warning='Макет изменился после сохранения. Выберите сценарий и запросите состояния заново.';
   }
   send('sessionRestored', { sessionId, ui:sessionUI, readOnly:sessionReadOnly, warning,
     stage: plan?.stage || (approvedSource?'done':'list'), hasSource:Boolean(approvedSource), formPlaced:Boolean(activeFormId),
     layoutLocked:Boolean(approvedSource?.signature), flowApproved, flow, revisionPending:plan?.revisionPending===true,
-    items: !sessionReadOnly ? prepared?.items?.map((item,index)=>prepared.stage==='copy'&&index===prepared.index?describeItem(item):describeSummary(item)) || [] : (plan?.items || []).map(({name,text})=>({name,text})),
+    items: !sessionReadOnly ? prepared?.items?.map((item,index)=>prepared.stage==='copy'&&index===prepared.index?describeItem(item):describeSummary(item)) || (approvedSource?.components || []).map(({uid,name,text})=>({uid,name,text})) : (plan?.items || approvedSource?.components || []).map(({name,text})=>({name,text})),
     labels:activeFormId && pixso.getNodeById(activeFormId) ? Object.fromEntries(confirmedFlowFields(pixso.getNodeById(activeFormId)).map(field=>[field.field,field.label])) : {},
+    flowFields:approvedSource&&activeFormId&&pixso.getNodeById(activeFormId)?confirmedFlowFields(pixso.getNodeById(activeFormId)):[],
     index:plan?.index || 0 });
 }
 
@@ -2966,8 +3152,8 @@ const historyHandlers = new Map(Object.entries({
 
 // Preview traffic must not rewrite history for every exported image.
 const transientCommands = new Set(['renderPreview', 'cancelPreview', 'previewItem', 'previewFlowState']);
-const measuredCommands = new Set(['dialog', 'prepare', 'review', 'reviewDialog', 'openProperties', 'previewItem', 'chooseVariant', 'previewFlowState']);
-const modelRequestCommands = new Set(['dialog', 'prepare']);
+const measuredCommands = new Set(['dialog', 'prepare', 'review', 'reviewDialog', 'openProperties', 'previewItem', 'chooseVariant', 'previewFlowState', 'requestStates']);
+const modelRequestCommands = new Set(['dialog', 'prepare', 'requestStates']);
 
 async function handleMessage(message) {
   if (!message || typeof message !== 'object' || typeof message.type !== 'string') return;
