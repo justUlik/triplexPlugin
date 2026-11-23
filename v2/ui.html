@@ -777,7 +777,7 @@ function renderItem(index, item) {
       }
     }
   };
-  replacePreview({ ...item, previewDeferred:false, pending: Boolean(item.previewId) });
+  replacePreview({ ...item, previewDeferred:false, pending: Boolean(item.previewId) && !item.png?.length });
   if (item.optionExample) {
     const example = document.createElement('p');
     example.className = 'hint';
@@ -833,8 +833,6 @@ function renderItem(index, item) {
     if (event.target === variant) return;
     clearTimeout(previewTimer);
     scheduleSessionSave();
-    if(activePreviewId) post('cancelPreview',{previewId:activePreviewId});
-    activePreviewId=undefined;clearTimeout(imageTimer);
     previewTimer=setTimeout(()=>{if(stage==='copy' && card.isConnected && !busy) post('previewItem',{...readDraft(),live:true});},300);
   });
   variant.onchange = () => {
@@ -1001,7 +999,7 @@ window.addEventListener('message', async event => {
       status('');
       break;
     case 'itemPreview':
-      if (stage === 'copy') replacePreview?.({ ...message.item, previewDeferred:false, pending: Boolean(message.item.previewId) });
+      if (stage === 'copy') replacePreview?.({ ...message.item, previewDeferred:false, pending: Boolean(message.item.previewId) && !message.item.png?.length });
       return;
     case 'previewProgress':
       if (activePreviewId === message.previewId) {

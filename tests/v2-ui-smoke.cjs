@@ -28,6 +28,11 @@ assert.equal(await page.getByText('Впишите подходящие пред�
 await page.fill('#items input[type=text]','Новое количество');
 await page.waitForFunction(()=>sent.some(m=>m.type==='previewItem'&&m.live&&m.values.Label==='Новое количество'));
 assert.equal(await page.locator('#items input[type=text]').inputValue(),'Новое количество');
+assert.equal(await page.evaluate(()=>sent.filter(m=>m.type==='cancelPreview').length),0);
+const renderCount=await page.evaluate(()=>sent.filter(m=>m.type==='renderPreview').length);
+await receive({type:'itemPreview',item:{name:'NumberField',previewId:43,cached:true,png:Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=','base64'))}});
+assert.equal(await page.evaluate(()=>sent.filter(m=>m.type==='renderPreview').length),renderCount);
+assert.equal(await page.locator('#items input[type=text]').inputValue(),'Новое количество');
 await page.screenshot({path:'/tmp/v2-properties.png'});
 await page.getByRole('button',{name:'Подтвердить',exact:true}).click();assert.equal(await page.evaluate(()=>sent.at(-1).type),'confirmItem');
 await receive({type:'readyToApply',items:[{uid:1,text:'Количество ЦФА',name:'NumberField'}]});await page.click('#backComponent');assert.equal(await page.evaluate(()=>sent.at(-1).type),'backComponent');
