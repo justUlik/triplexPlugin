@@ -49,7 +49,7 @@ function runGigaCode(prompt) {
     const request = 'Ответь только текстом. Для этой задачи не нужны инструменты, файлы и команды.\n' + prompt;
     execFile('gigacode', ['-p', request, '--output-format', 'json'], {
       timeout: 90_000,
-      maxBuffer: 128 * 1024,
+      maxBuffer: 512 * 1024,
       windowsHide: true
     }, (error, stdout) => {
       if (error) {

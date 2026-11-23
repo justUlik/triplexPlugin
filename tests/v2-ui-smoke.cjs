@@ -4,6 +4,15 @@ const fs=require('fs');const assert=require('node:assert/strict');
 await page.setContent(fs.readFileSync('v2/ui.html','utf8'));
 await page.evaluate(()=>{window.sent=[];parent.postMessage=m=>window.sent.push(m.pluginMessage);});
 const receive=async m=>page.evaluate(m=>window.dispatchEvent(new MessageEvent('message',{data:{pluginMessage:m}})),m);
+const previewRequests=new Set();
+async function renderQueuedStates(){
+ for(let n=0;n<100;n++){
+  const requests=await page.evaluate(()=>sent.filter(m=>m.type==='previewFlowState'));
+  const request=requests.find(m=>!previewRequests.has(m.previewId));if(!request)break;
+  previewRequests.add(request.previewId);
+  await receive({type:'flowPreview',component:true,index:request.index,previewId:request.previewId,png:Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=','base64'))});
+ }
+}
 await page.screenshot({path:'/tmp/v2-initial.png'});
 await page.click('#sizeToggle');assert.equal(await page.locator('#sizeOptions').isVisible(),true);
 await page.click('[data-size=MD]');assert.equal(await page.evaluate(()=>sent.at(-1).type),'placeLightbox');
@@ -46,22 +55,27 @@ await page.screenshot({path:'/tmp/v2-states-analytics.png',fullPage:true});
 await page.fill('#analytics','При пустом количестве показать ошибку: Укажите количество');await page.click('#flowSend');
 assert.equal(await page.evaluate(()=>sent.at(-1).type),'requestStates');assert.equal(await page.evaluate(()=>sent.at(-1).mode),'analytics');
 await receive({type:'flowProposal',mode:'analytics',reply:'Предлагаю активное поле и ошибку.',fields:[{field:'1',component:'NumberField',label:'Количество ЦФА'}],labels:{'1':'Количество ЦФА'},states:[{name:'Активное печатание',condition:'Пользователь вводит количество',values:{'1':'10'},properties:[{field:'1',values:{Active:true}}],errors:[]},{name:'Пустое количество',condition:'Отправка без количества',values:{'1':''},errors:[{field:'1',text:'Укажите количество'}]}]});
-assert.equal(await page.locator('.state-card').count(),2);assert.equal(await page.locator('.state-component').first().locator('span').textContent(),'Количество ЦФА');
-assert.equal(await page.locator('.state-card').nth(1).locator('.state-change').isVisible(),true);
-assert.match(await page.locator('.state-card').nth(1).locator('.state-change').textContent(),/Ошибка: Укажите количество/);
+assert.equal(await page.locator('.state-card').count(),2);
+assert.equal(await page.locator('.component-state-group').count(),1);
+assert.equal(await page.locator('.component-state-group>h3').textContent(),'Количество ЦФА');
+assert.equal(await page.locator('#approveFlow').isDisabled(),true);
+await renderQueuedStates();
+assert.equal(await page.locator('.component-state-preview img').count(),2);
+assert.equal(await page.locator('.state-component').count(),0);
+assert.equal(await page.locator('#approveFlow').isEnabled(),true);
 assert.equal(await page.locator('.flow-buttons button:visible').count(),2);
 await page.screenshot({path:'/tmp/v2-states-proposal.png',fullPage:true});
 await page.locator('.state-card').nth(1).locator('summary').click();
 await page.locator('.state-card').nth(1).locator('label').filter({hasText:'Текст ошибки'}).locator('textarea').fill('Мой согласованный текст ошибки');
-assert.equal(await page.locator('.state-card').nth(1).locator('.state-change').isVisible(),true);
-assert.match(await page.locator('.state-card').nth(1).locator('.state-change').textContent(),/Ошибка: Мой согласованный текст ошибки/);
+await page.waitForTimeout(350);await renderQueuedStates();
+assert.equal(await page.evaluate(()=>sent.filter(m=>m.type==='previewFlowState').at(-1).edits[1].errorTexts[0]),'Мой согласованный текст ошибки');
 await page.click('#approveFlow');assert.equal(await page.evaluate(()=>sent.at(-1).type),'approveFlow');
 assert.equal(await page.evaluate(()=>sent.at(-1).edits[1].errorTexts[0]),'Мой согласованный текст ошибки');
 await receive({type:'flowApproved'});assert.equal(await page.evaluate(()=>sent.at(-1).type),'createStates');
-await receive({type:'statesCreated',count:2,errorsPending:0,skipped:0});
+await receive({type:'statesCreated',components:true,count:2,errorsPending:0,skipped:0});
 await page.check('#stateModeAuto');assert.equal(await page.evaluate(()=>sent.at(-1).type),'requestStates');assert.equal(await page.evaluate(()=>sent.at(-1).mode),'auto');
 await receive({type:'flowProposal',mode:'auto',reply:'Варианты для поля количества.',fields:[{field:'1',component:'NumberField',label:'Количество ЦФА'}],labels:{'1':'Количество ЦФА'},states:[{name:'Активное печатание',condition:'Ввод количества',values:{'1':'10'},properties:[{field:'1',values:{Active:true}}],errors:[]}]});
-await page.screenshot({path:'/tmp/v2-states-auto.png',fullPage:true});
+await renderQueuedStates();await page.screenshot({path:'/tmp/v2-states-auto.png',fullPage:true});
 await receive({type:'sessionRestored',stage:'done',hasSource:true,formPlaced:true,ui:{stateMode:'auto',statesExpanded:true,task:'Форма инвестирования',size:'MD'},items:[{uid:1,name:'NumberField',text:'Количество ЦФА'}]});
 assert.equal(await page.locator('#stateModeChoices input:checked').count(),0);assert.equal(await page.locator('#scenario').isVisible(),true);assert.equal(await page.locator('#items>li').count(),1);
 

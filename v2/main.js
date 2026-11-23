@@ -2233,10 +2233,10 @@ async function requestStates(message) {
   lockedSource();
   for(const node of sourceFields(source))await captureFieldCopy(node);
   if(flow && (flow.mode!==mode || flow.analytics!==analytics)) {flow=null;invalidateFlow();}
-  requestFlow({...message,mode,analytics:mode==='analytics'?analytics:'',requirements,standard:approvedSource.standard || message.standard || '',feedback:message.feedback || ''});
+  requestFlow({...message,renderMode:'components',mode,analytics:mode==='analytics'?analytics:'',requirements,standard:approvedSource.standard || message.standard || '',feedback:message.feedback || ''});
 }
 
-function flowStateKey(state) { return JSON.stringify([state.name,state.condition,state.errors]); }
+function flowStateKey(state) { return JSON.stringify(state.field?[state.field,state.name,state.condition,state.errors]:[state.name,state.condition,state.errors]); }
 function editedFlowStates(edits) {
   if (edits===undefined) return flow.states;
   if (!Array.isArray(edits) || edits.length!==flow.states.length) throw new Error('Предложения изменились. Откройте актуальный список состояний.');
@@ -2252,6 +2252,7 @@ function editedFlowStates(edits) {
 }
 
 async function previewFlowState({ index, edits, selection, previewId }) {
+  if(flow?.renderMode==='components')return previewComponentState({index,edits,previewId});
   let copy;
   try {
     const source=lockedSource();
@@ -2277,12 +2278,12 @@ function flowDraftOverrides(before,after) {
     if(!draft)return [];
     const errors=state.errors.flatMap((error,j)=>draft.errors[j]?.text!==error.text?[{field:error.field,before:error.text,after:draft.errors[j].text}]:[]);
     const values=Object.entries(state.values).filter(([id,value])=>draft.values[id]!==value).map(([id,value])=>({id,before:value,after:draft.values[id]}));
-    return errors.length||values.length||state.name!==draft.name||state.condition!==draft.condition?[{name:state.name,condition:state.condition,editedName:draft.name,editedCondition:draft.condition,errors,values}]:[];
+    return errors.length||values.length||state.name!==draft.name||state.condition!==draft.condition?[{field:state.field,name:state.name,condition:state.condition,editedName:draft.name,editedCondition:draft.condition,errors,values}]:[];
   });
 }
 function restoreFlowDraftOverrides(plan,overrides=[]) {
   for(const edit of overrides) {
-    const state=plan.states.find(state=>[edit.name,edit.editedName].includes(state.name)&&[edit.condition,edit.editedCondition].includes(state.condition));
+    const state=plan.states.find(state=>(!edit.field||state.field===edit.field||Object.prototype.hasOwnProperty.call(state.values,edit.field)||state.errors.some(error=>error.field===edit.field))&&[edit.name,edit.editedName].includes(state.name)&&[edit.condition,edit.editedCondition].includes(state.condition));
     if(!state)continue;
     if(state.name===edit.name)state.name=edit.editedName;
     if(state.condition===edit.condition)state.condition=edit.editedCondition;
@@ -2309,26 +2310,26 @@ function uniqueChangedStates(states,nodes) {
   return [...seen.values()];
 }
 
-function requestFlow({ requirements, feedback, standard, selection, edits, mode = "auto", analytics = "" }) {
+function requestFlow({ requirements, feedback, standard, selection, edits, mode = "auto", analytics = "", renderMode = "screens" }) {
   const source = lockedSource();
   if (typeof requirements !== 'string' || !requirements.trim()) throw new Error('Вставьте бизнес-требования.');
   if (requirements.length > 12000 || typeof standard !== 'string' || standard.length > 8000 ||
       typeof feedback !== 'string' || feedback.length > 2000) throw new Error('Сократите входной текст.');
   const previous=flow?editedFlowStates(edits):undefined;
-  const context = { requirements: requirements.trim(), standard: standard.trim(), mode, analytics, feedback };
+  const context = { requirements: requirements.trim(), standard: standard.trim(), mode, analytics, feedback,renderMode };
   pendingFlow = {...context,draftOverrides:flow&&previous?flowDraftOverrides(flow.states,previous):[]};
   flowApproved = false;
   send('flowRequest', { prompt: [
-    'Предложи состояния взаимодействия и ошибки для уже собранной формы. Не меняй состав компонентов.',
+    'Предложи отдельные состояния и ошибки КАЖДОГО компонента. Результат — независимые отрисованные компоненты, не экраны и не комбинации всех полей. Одна ошибка одного поля — один вариант. Не меняй состав компонентов.',
     'Обязательно проверь раскрытый Select/Multiselect/Suggest и активное печатание TextField/MaskedField/AmountField/NumberField: фокус/active плюс пример values. Добавляй только применимые реальные variants или BOOLEAN properties. Не имитируй раскрытие изменением текста.',
     'В режиме analytics правила и точные тексты из analytics имеют приоритет. В auto используй только ограничения, явно указанные в задаче или свойствах поля. Если правил не хватает, не создавай гипотетические ошибки ради количества: достаточно доступных взаимодействий.',
     'Triplex: TextFieldBase содержит FormField (active/status) и отдельный FormFieldDescription. Текст ошибки обычно записывается в Description, а error/status включается отдельно. React props не равны свойствам Pixso: используй только реальные поля properties/variants/stateCapabilities.',
-    'Предложи до 8 полезных отличий от текущего экрана, а не общий список всех возможных ошибок. Не добавляй начальную пустую форму, если это уже исходный макет. Для поля предложи конкретное взаимодействие или подтверждённую проверку. Не выдумывай лимиты, минимумы, обязательность, зависимости, сеть, успех или загрузку без основания в задаче/аналитике либо реально доступного состояния.',
+    'Покрой все применимые состояния каждого поля, включая разные подтверждённые ошибки. Не ограничивайся 8 общими вариантами всей формы. Избегай декартовых комбинаций: выводи отдельные компоненты. Не добавляй начальную пустую форму, если это уже исходный макет. Для поля предложи конкретное взаимодействие или подтверждённую проверку. Не выдумывай лимиты, минимумы, обязательность, зависимости, сеть, успех или загрузку без основания в задаче/аналитике либо реально доступного состояния.',
     'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
     'Верни только JSON: {"reply":"Короткое пояснение","states":[{"name":"Название состояния","condition":"Когда показать","values":{},"variants":[],"properties":[],"errors":[]}]}. Заполни нужные изменения реальными field и controls из fields. Не подставляй служебные слова из примера вместо библиотечных идентификаторов или состояний.',
     'Для взаимодействий предпочтительно копируй готовый control из fields.stateCapabilities.controls. Можно передать variants:[{field,axes:{State:"Active",Filled:true}}]; плагин сохранит неизменяемые оси. Для ошибки Error и Warning могут быть отдельными осями True/False, а не значениями State. Не передавай variant:"" или пустые записи variants.',
     'Для каждого состояния обязательно укажи name и condition. Если нет значений/ошибок, передай values:{} и errors:[], без null. field копируй из fields.field, не из номера каталога или позиции строки.',
-    'Дай до 24 релевантных состояний. properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields; для variants скопируй key из variantOptions (предпочтительно) или точное полное имя. Не передавай название оси «State»/«Состояние» вместо значения. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
+    'Дай до 96 релевантных отдельных состояний компонентов (обычно до 12 на компонент). properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields; для variants скопируй key из variantOptions (предпочтительно) или точное полное имя. Не передавай название оси «State»/«Состояние» вместо значения. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
     'fields.currentCopy — актуальные тексты с холста, включая ручные правки. Сохраняй подписи, placeholders и описания. Меняй только явно заданные в состоянии значения и Description соответствующей ошибки. Старые подписи из истории не должны возвращаться.',
     'fields — фактически подтверждённые компоненты с холста, их назначение, текущие свойства и доступные варианты. confirmedTask и decisions — исходная задача и решения пользователя. Следуй им; не возвращай удалённые или заменённые компоненты.',
     'Не предлагай ввод для компонента отображения Amount/Text. Учитывай поведение компонента: не предлагай невозможные действия (например ввод букв, если поле их отфильтровывает). Не меняй размер или тему ради ошибки. Используй только точные варианты из fields.',
@@ -2418,10 +2419,10 @@ function statePlanObject(value,path) {
   if(!value||typeof value!=='object'||Array.isArray(value))throw statePlanError(path,'ожидается объект');
   return value;
 }
-function normalizeStatePlan(plan,nodes) {
+function normalizeStatePlan(plan,nodes,limit=24) {
   statePlanObject(plan,'ответ');
   if(!Array.isArray(plan.states))throw statePlanError('states','ожидается список состояний');
-  if(plan.states.length>24)throw statePlanError('states','получено '+plan.states.length+' состояний при лимите 24');
+  if(plan.states.length>limit)throw statePlanError('states','получено '+plan.states.length+' состояний при лимите '+limit);
   const fieldId=(value,path,form=false)=>{
     const id=value==null&&form?'':typeof value==='number'&&Number.isSafeInteger(value)?String(value):typeof value==='string'?value.trim():undefined;
     if(id===undefined||(!nodes.has(id)&&!(form&&id==='')))throw statePlanError(path,'неизвестный field; используйте идентификатор из fields');
@@ -2476,20 +2477,102 @@ function normalizeStatePlan(plan,nodes) {
 
 function reviewFlow({ raw }) {
   const source = lockedSource();
-  if (!pendingFlow || typeof raw !== 'string' || raw.length > 40000) throw new Error('Некорректный ответ GigaCode.');
+  if (!pendingFlow || typeof raw !== 'string' || raw.length > (pendingFlow.renderMode==='components'?80000:40000)) throw new Error('Некорректный ответ GigaCode.');
   const nodes = new Map(sourceFields(source).map(node=>[node.getPluginData('triplex-field-id'),node]));
-  const plan = normalizeStatePlan(parseModelResponse(raw),nodes);
+  const plan = normalizeStatePlan(parseModelResponse(raw,pendingFlow.renderMode==='components'?80000:40000),nodes,pendingFlow.renderMode==='components'?96:24);
   restoreFlowDraftOverrides(plan,pendingFlow.draftOverrides);
   plan.states=plan.states.filter(state=>Object.keys(state.values).length||state.errors.length||state.variants.length||state.properties.length);
   for(const state of plan.states)validateStateBindings(state,nodes);
   completeInteractionStates(plan,nodes);
   for(const state of plan.states) validateStateBindings(state,nodes);
+  if(pendingFlow.renderMode==='components')plan.states=splitComponentStates(plan.states,nodes);
   plan.states=uniqueChangedStates(plan.states,nodes);
   const modelReply=plan.reply;
   plan.reply=plan.states.length?'Подготовил вариантов: '+plan.states.length+'. Проверьте изменения ниже.':'Пока не удалось собрать новые варианты. Уточните нужные состояния в аналитике.';
   flow = { ...pendingFlow, states: plan.states, reply: plan.reply,modelReply,limitations:plan.limitations };
   pendingFlow = null;
-  send('flowProposal', { reply: plan.reply, states: plan.states,limitations:flow.limitations, mode:flow.mode, analytics:flow.analytics, fields:confirmedFlowFields(source), labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
+  send('flowProposal', { reply: plan.reply, states: plan.states,renderMode:flow.renderMode,limitations:flow.limitations, mode:flow.mode, analytics:flow.analytics, fields:confirmedFlowFields(source), labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
+}
+
+function splitComponentStates(states,nodes) {
+  const result=[];
+  for(const state of states) {
+    const ids=new Set([...Object.keys(state.values),...(state.variants||[]).map(v=>v.field),...(state.properties||[]).map(p=>p.field),...state.errors.map(e=>e.field).filter(Boolean)]);
+    if(state.errors.some(error=>!error.field))throw new Error('Укажите компонент для каждой ошибки: общий текст формы нельзя отрисовать внутри поля.');
+    for(const id of ids) {
+      if(!nodes.has(id))continue;
+      const errors=state.errors.filter(error=>error.field===id);
+      for(const error of errors.length?errors:[undefined]) {
+        const scoped={...state,field:id,values:Object.prototype.hasOwnProperty.call(state.values,id)?{[id]:state.values[id]}:{},variants:(state.variants||[]).filter(choice=>choice.field===id),properties:(state.properties||[]).filter(patch=>patch.field===id),errors:error?[error]:[]};
+        scoped.displayName=error?'Ошибка':scoped.variants.some(v=>variantMatchesState(v.variant,'opened'))?'Раскрытый список':scoped.variants.some(v=>variantMatchesState(v.variant,'active'))?'Активный ввод':Object.prototype.hasOwnProperty.call(scoped.values,id)?scoped.values[id]===''?'Пустое поле':'Заполненное поле':state.name;
+        result.push(scoped);
+      }
+    }
+  }
+  return result.sort((a,b)=>[...nodes.keys()].indexOf(a.field)-[...nodes.keys()].indexOf(b.field));
+}
+
+const componentStatePreviewCache=new Map();
+let componentStateCacheSource;
+function componentStateCacheKey(source,state) {
+  const signature=approvedSource?.signature || layoutSignature(source);
+  if(componentStateCacheSource!==signature){componentStatePreviewCache.clear();componentStateCacheSource=signature;}
+  return JSON.stringify([state.field,state.values,state.variants,state.properties,state.errors]);
+}
+function rememberComponentStatePreview(key,png) {
+  if(!png.length||png.length>1024*1024)return;
+  componentStatePreviewCache.delete(key);componentStatePreviewCache.set(key,png);
+  while(componentStatePreviewCache.size>96||[...componentStatePreviewCache.values()].reduce((total,item)=>total+item.length,0)>1024*1024)componentStatePreviewCache.delete(componentStatePreviewCache.keys().next().value);
+}
+async function makeComponentState(source,state) {
+  const field=sourceFields(source).find(node=>node.getPluginData('triplex-field-id')===state.field);
+  if(!field||typeof field.clone!=='function')throw new Error('Не удалось скопировать компонент состояния.');
+  let copy;
+  try {
+    copy=field.clone();
+    pixso.currentPage.appendChild(copy);
+    copy.locked=false;copy.x=source.x+source.width+48;copy.y=source.y;
+    const rendered=await applyStateToCopy(copy,state,field);
+    if(rendered.errorsPending)throw new Error('В компоненте не найдено место для текста ошибки. Этот вариант пока нельзя отрисовать.');
+    if(rendered.skipped)throw new Error('Не удалось применить значение к полю. Этот вариант пока нельзя отрисовать.');
+    copy.clipsContent=false;
+    await yieldToEditor();
+    lockedSource();
+    return copy;
+  } catch(error) {if(copy&&!copy.removed)copy.remove();throw error;}
+}
+async function previewComponentState({index,edits,previewId}) {
+  let copy;
+  try {
+    const source=lockedSource();
+    if(!Number.isInteger(index)||!flow?.states?.[index])throw new Error('Состояние недоступно.');
+    const state=editedFlowStates(edits)[index];
+    const key=componentStateCacheKey(source,state),cached=componentStatePreviewCache.get(key);
+    if(cached){send('flowPreview',{index,previewId,png:cached,component:true});return;}
+    copy=await makeComponentState(source,state);
+    if(typeof copy.exportAsync!=='function')throw new Error('Pixso не поддерживает экспорт компонента.');
+    const png=Array.from(await copy.exportAsync(previewExportSettings(copy,640)));
+    lockedSource();rememberComponentStatePreview(key,png);
+    send('flowPreview',{index,previewId,png,component:true});
+  } catch(error){send('flowPreview',{index,previewId,error:error.message,component:true});}
+  finally{if(copy&&!copy.removed)copy.remove();}
+}
+async function createComponentStates() {
+  const source=lockedSource();
+  if(!flowApproved||!flow?.selected?.length)throw new Error('Выберите и утвердите состояния компонентов.');
+  const copies=[],columns=new Map();let columnX=source.x+source.width+48;
+  try {
+    for(const state of flow.selected) {
+      let column=columns.get(state.field);
+      if(!column){const field=sourceFields(source).find(node=>node.getPluginData('triplex-field-id')===state.field);if(!field)throw new Error('Компонент больше не доступен.');column={x:columnX,y:source.y};columns.set(state.field,column);columnX+=field.width+48;}
+      const copy=await makeComponentState(source,state);copies.push(copy);
+      copy.x=column.x;copy.y=column.y;column.y+=copy.height+32;
+      copy.name=(copyContext(sourceFields(source).find(node=>node.getPluginData('triplex-field-id')===state.field)).label||'Компонент')+' / '+state.name+(state.errors[0]?' / '+state.errors[0].text:'');
+      lockedSource();
+    }
+  } catch(error){for(const copy of copies)if(!copy.removed)copy.remove();throw error;}
+  flowApproved=false;
+  send('statesCreated',{count:copies.length,groups:columns.size,components:true,skipped:0,errorsPending:0});
 }
 
 function validateStateBindings(state,nodes) {
@@ -2571,9 +2654,9 @@ async function applyStateToCopy(copy,state,source) {
     if(!await writeStateText(field,'error',text))errorsPending+=messages.length;
     annotations.push((field?.getPluginData('triplex-field-label') || 'Форма') + ' — ' + text);
   }
-  for (const [node, width, height] of sizes) node.resizeWithoutConstraints(width,expandedFields.has(node.getPluginData('triplex-field-id'))?Math.max(height,node.height):height);
+  for (const [node, width, height] of sizes) node.resizeWithoutConstraints(width,(node===copy&&copy.type==='INSTANCE')||expandedFields.has(node.getPluginData('triplex-field-id'))?Math.max(height,node.height):height);
   if(expandedFields.size)copy.clipsContent=false;
-  copy.resizeWithoutConstraints(source.width, source.height);
+  copy.resizeWithoutConstraints(source.width,copy.type==='INSTANCE'?Math.max(source.height,copy.height,Number(copy.mainComponent?.height)||0):source.height);
   copy.setPluginData('triplex-flow-errors', JSON.stringify(state.errors));
   return {skipped,errorsPending,annotations};
 }
@@ -2617,6 +2700,7 @@ async function writeStateText(field,role,value) {
 }
 
 async function createStates() {
+  if(flow?.renderMode==='components')return createComponentStates();
   const source = lockedSource();
   if (!flowApproved || !flow?.selected?.length) throw new Error('Выберите и утвердите состояния и ошибки.');
   const copies = [];

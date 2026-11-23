@@ -512,4 +512,41 @@ module._compile(source + `
    assert.equal(field.componentProperties['Value#new'].value,'');assert.equal(field.componentProperties['Description#new'].value,'Укажите количество');
    assert.equal(sourceField.componentProperties['Description#1'].value,'Моя подсказка');
  });
+
+ test('component mode separates every field and every error',()=>{
+   const app=backend();app.ctx.nodes=new Map([['1',{}],['2',{}]]);
+   const states=JSON.parse(JSON.stringify(app.run('splitComponentStates([{name:"Ошибки",condition:"Проверка",values:{"1":"","2":"wallet"},variants:[],properties:[],errors:[{field:"1",text:"Введите количество"},{field:"1",text:"Недостаточно средств"},{field:"2",text:"Выберите кошелёк"}]}],nodes)')));
+   assert.equal(states.length,3);assert.deepEqual(states.map(s=>s.field),['1','1','2']);
+   assert.deepEqual(states.map(s=>s.errors.length),[1,1,1]);assert.deepEqual(states[2].values,{'2':'wallet'});
+   assert.throws(()=>app.run('splitComponentStates([{values:{},errors:[{field:"",text:"Ошибка формы"}]}],nodes)'),/Укажите компонент/);
+ });
+ function componentRenderFixture(){
+   const fixture=statePreviewFixture(),app=fixture,{source}=fixture,made=[],exports=[];
+   app.ctx.pixso.currentPage.appendChild=copy=>{copy.parent=app.ctx.pixso.currentPage;};
+   source.clone=()=>{throw new Error('Full form must never be cloned');};
+   source.children[0].clone=()=>{
+     const original=source.children[0],copy={...original,componentProperties:structuredClone(original.componentProperties),setPluginData(){},remove(){this.removed=true;}};
+     copy.exportAsync=async()=>{exports.push(structuredClone(copy.componentProperties));return new Uint8Array([1,2,3]);};
+     made.push(copy);return copy;
+   };
+   app.run('flow.renderMode="components";flow.states[0].field="1"');
+   return {...fixture,app,made,exports};
+ }
+ test('automatic component preview renders value and error inside one instance and caches it',async()=>{
+   const {app,source,made,exports}=componentRenderFixture();
+   await app.run('previewFlowState({index:0,previewId:1})');
+   assert.equal(made.length,1);assert.equal(exports.length,1);
+   assert.equal(exports[0]['Value#1'].value,'');assert.equal(exports[0]['Error#1'].value,'Введите количество');
+   assert.equal(made[0].removed,true);assert.equal(source.children[0].componentProperties['Value#1'].value,'10');
+   assert.equal(app.messages.at(-1).component,true);assert.ok(app.messages.at(-1).png);
+   await app.run('previewFlowState({index:0,previewId:2})');assert.equal(made.length,1);
+ });
+ test('component generation adds individual components and rolls back on an unrenderable error',async()=>{
+   const {app,made}=componentRenderFixture();
+   app.run('flow.selected=flow.states;flowApproved=true');await app.run('createStates()');
+   assert.equal(made.length,1);assert.equal(made[0].removed,undefined);assert.equal(app.messages.at(-1).components,true);
+   app.run('flow.selected=[flow.states[0],{...flow.states[0],field:"missing"}];flowApproved=true');
+   await assert.rejects(app.run('createStates()'),/Компонент больше не доступен/);
+   assert.equal(made[1].removed,true);assert.equal(made[0].removed,undefined);
+ });
 `, __filename);

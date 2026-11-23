@@ -97,6 +97,8 @@
   .state-card details{border:0;padding:0;margin:8px 0 0;background:white}.state-card summary{font-size:12px;font-weight:400;color:var(--accent)}.state-include{display:flex;align-items:center;gap:8px}.state-include input{width:16px;height:16px;accent-color:var(--accent)}
   #stateActions{margin-top:16px}.flow-buttons{display:flex;gap:16px;align-items:start;margin-top:16px}.flow-buttons button{white-space:nowrap}#plan[data-stage=done] .remove-component{display:none}
   .state-change{font-size:14px;line-height:20px;margin:8px 0 0;white-space:pre-wrap;color:#1f1f22}
+
+  .component-state-group{display:flex;flex-direction:column;gap:20px;margin:8px 0 20px}.component-state-group>h3{margin:0;font-size:18px;font-weight:600;line-height:24px}.component-state-group .state-card{margin:0;padding:0;border:0;background:white}.component-state-group h4{font-size:14px;font-weight:400;color:var(--muted);margin:0 0 8px;line-height:20px}.component-state-preview{background:white;min-height:32px}.component-state-preview img{display:block;max-width:100%;height:auto;margin:0;object-position:left center}.component-state-group details{margin-top:8px}.component-state-group summary{font-size:12px}
 </style>
 </head>
 <body>
@@ -203,6 +205,7 @@ let flowApproved = false;
 let statesExpanded=false;
 let stateMode='';
 let flowFields=[];
+let flowRenderMode='components';
 let creatingApprovedStates=false;
 let hasFlowDraft = false;
 let hasFlowResponse = false;
@@ -271,7 +274,7 @@ function restoreHistoryUI(message) {
     for(const pair of saved.flowDecisions||[]) flowDecisions.set(pair[0],pair[1]);
     stateMode=saved.stateMode||message.flow?.mode||'';if(!message.flow&&stateMode==='auto')stateMode='';statesExpanded=saved.statesExpanded===true||Boolean(message.flow);
     $('analytics').value=saved.analytics||message.flow?.analytics||'';
-    flowFields=message.flowFields||[];
+    flowFields=message.flowFields||[];flowRenderMode=message.flow?.renderMode||'screens';
     if(message.flow?.states) renderFlowChoices(message.flow.states,message.labels,saved.flowEdits);
     hasFlowResponse=saved.hasFlowResponse===true || Boolean(message.flow);
     hasFlowDraft=saved.hasFlowDraft===true && Boolean(message.flow?.states?.length);
@@ -318,7 +321,7 @@ function setBusy(value) {
   $('flowSend').textContent=hasFlowResponse?'Отправить на доработку':stateMode==='auto'?'Повторить попытку':'Добавить состояния компонент';
   for(const id of ['flowSend','approveFlow']){$(id).classList.toggle('loading',value);$(id).setAttribute('aria-busy',String(value));}
   $('approveFlow').hidden = !hasFlowDraft || flowApproved;
-  $('approveFlow').disabled = value;
+  $('approveFlow').disabled = value || (flowRenderMode==='components' && [...flowPreviewViews].some(([index,view])=>flowSelection[index]?.included&&(!view.ready||view.error)));
   $('layoutStep').hidden = true;
   $('lockLayout').hidden = layoutLocked;
   $('unlockLayout').hidden = !layoutLocked;
@@ -360,6 +363,7 @@ function setBusy(value) {
     $('flowChoices').querySelectorAll('button,input,textarea').forEach(control=>{control.disabled=true;});
     for(const id of ['task','standard','revision','feedback']) $(id).disabled=true;
   }
+  pumpComponentPreviews();
 }
 
 function resetPlan() {
@@ -627,14 +631,72 @@ $('unlockLayout').onclick = () => { if (!busy) { setBusy(true); post('unlockLayo
 
 let flowEdits = [];
 const flowPreviewViews = new Map();
+let componentPreviewQueue=[];
+let componentPreviewInFlight;
 let flowPreviewSequence = 0;
 function disposeFlowPreviews() {
   for(const view of flowPreviewViews.values()) if(view.url) URL.revokeObjectURL(view.url);
-  flowPreviewViews.clear();
+  flowPreviewViews.clear();componentPreviewQueue=[];
+}
+function queueComponentPreview(index) {
+  const view=flowPreviewViews.get(index);if(!view||!view.component)return;
+  view.token=++flowPreviewSequence;view.ready=false;view.error=false;
+  view.note.textContent='Отрисовываю компонент…';view.note.hidden=false;
+  if(!componentPreviewQueue.includes(index))componentPreviewQueue.push(index);
+  pumpComponentPreviews();
+}
+function pumpComponentPreviews() {
+  if(busy||historyReadOnly||componentPreviewInFlight||flowRenderMode!=='components')return;
+  let index;
+  while(componentPreviewQueue.length){index=componentPreviewQueue.shift();if(flowPreviewViews.has(index))break;index=undefined;}
+  if(index===undefined)return;
+  const view=flowPreviewViews.get(index);
+  componentPreviewInFlight={index,previewId:view.token};
+  post('previewFlowState',{index,previewId:view.token,edits:flowEdits,selection:flowSelection});
 }
 function renderFlowChoices(states,labels={},savedEdits=flowEdits) {
+  if(flowRenderMode!=='components')return renderLegacyFlowChoices(states,labels,savedEdits);
   disposeFlowPreviews();flowStates=states;
-  const sourceKey=state=>JSON.stringify([state.name,state.condition,state.errors]);
+  const sourceKey=state=>JSON.stringify(state.field?[state.field,state.name,state.condition,state.errors]:[state.name,state.condition,state.errors]);
+  const prior=new Map((savedEdits||[]).map(edit=>[edit.sourceKey,edit]));
+  flowEdits=states.map(state=>prior.get(sourceKey(state))||{sourceKey:sourceKey(state),name:state.name,condition:state.condition,values:{...state.values},errorTexts:state.errors.map(error=>error.text)});
+  flowSelection=states.map(state=>({included:flowDecisions.get(JSON.stringify([state.field,state.name,state.condition]))??flowDecisions.get(JSON.stringify([state.name,state.condition]))??true,errors:state.errors.map(()=>true)}));
+  $('flowChoices').replaceChildren();const groups=new Map();
+  states.forEach((state,i)=>{
+    const edit=flowEdits[i],fieldId=state.field||Object.keys(state.values)[0]||state.errors[0]?.field||state.variants?.[0]?.field||state.properties?.[0]?.field;
+    let group=groups.get(fieldId);
+    if(!group){group=document.createElement('section');group.className='component-state-group';group.dataset.field=fieldId;const title=document.createElement('h3');title.textContent=labels[fieldId]||flowFields.find(field=>field.field===fieldId)?.label||'Компонент';group.appendChild(title);groups.set(fieldId,group);$('flowChoices').appendChild(group);}
+    const card=document.createElement('article');card.className='state-card';group.appendChild(card);
+    const title=document.createElement('h4');title.textContent=state.displayName||state.name;card.appendChild(title);
+    const preview=document.createElement('div');preview.className='component-state-preview';const area=document.createElement('div'),note=document.createElement('p');note.className='hint';note.textContent='Отрисовываю компонент…';preview.append(area,note);card.appendChild(preview);
+    const view={component:true,area,note,token:0,ready:false,error:false};flowPreviewViews.set(i,view);
+    const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Изменить текст';details.appendChild(summary);card.appendChild(details);
+    let editTimer;
+    function changed(){view.ready=false;flowApproved=false;hasFlowDraft=flowStates.length>0;setBusy(busy);post('invalidateFlow');scheduleSessionSave();clearTimeout(editTimer);editTimer=setTimeout(()=>{if(flowPreviewViews.get(i)===view){queueComponentPreview(i);setBusy(busy);}},300);}
+    const include=document.createElement('label');include.className='state-include';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=flowSelection[i].included;checkbox.onchange=()=>{flowSelection[i].included=checkbox.checked;flowDecisions.set(JSON.stringify([state.field,state.name,state.condition]),checkbox.checked);flowApproved=false;scheduleSessionSave();post('invalidateFlow');setBusy(busy);};include.append(checkbox,document.createTextNode('Добавить на макет'));details.appendChild(include);
+    function editable(caption,value,write){const label=document.createElement('label');label.textContent=caption;const input=document.createElement('textarea');input.maxLength=3000;input.value=value;input.oninput=()=>{write(input.value);changed();};label.appendChild(input);details.appendChild(label);}
+    for(const [id,value] of Object.entries(edit.values))editable('Значение в поле',value,text=>edit.values[id]=text);
+    state.errors.forEach((error,j)=>editable('Текст ошибки',edit.errorTexts[j],text=>edit.errorTexts[j]=text));
+    const condition=document.createElement('p');condition.className='hint';condition.textContent=edit.condition;details.appendChild(condition);
+    queueComponentPreview(i);
+  });
+}
+function showFlowPreview(message) {
+  if(!message.component)return showLegacyFlowPreview(message);
+  if(componentPreviewInFlight?.index===message.index&&componentPreviewInFlight.previewId===message.previewId)componentPreviewInFlight=undefined;
+  const view=flowPreviewViews.get(message.index);
+  if(view?.component&&view.token===message.previewId){
+    if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
+    view.area.replaceChildren();view.error=Boolean(message.error)||!message.png?.length;view.ready=!view.error;
+    if(view.error){view.note.hidden=false;view.note.textContent=message.error||'Не удалось получить изображение компонента.';}
+    else {const image=document.createElement('img');image.alt=(flowStates[message.index].displayName||flowStates[message.index].name)+' — компонент';view.url=URL.createObjectURL(new Blob([new Uint8Array(message.png)],{type:'image/png'}));image.src=view.url;view.area.appendChild(image);view.note.hidden=true;}
+  }
+  setBusy(busy);pumpComponentPreviews();
+}
+
+function renderLegacyFlowChoices(states,labels={},savedEdits=flowEdits) {
+  disposeFlowPreviews();flowStates=states;
+  const sourceKey=state=>JSON.stringify(state.field?[state.field,state.name,state.condition,state.errors]:[state.name,state.condition,state.errors]);
   const old=new Map((savedEdits||[]).map(edit=>[edit.sourceKey,edit]));
   flowEdits=states.map(state=>old.get(sourceKey(state))||{sourceKey:sourceKey(state),name:state.name,condition:state.condition,values:{...state.values},errorTexts:state.errors.map(error=>error.text)});
   flowSelection=states.map(state=>({included:flowDecisions.get(JSON.stringify([state.name,state.condition]))??true,errors:state.errors.map(error=>flowDecisions.get(JSON.stringify([error.field,error.text]))??true)}));
@@ -674,7 +736,7 @@ function renderFlowChoices(states,labels={},savedEdits=flowEdits) {
     $('flowChoices').appendChild(card);
   });
 }
-function showFlowPreview(message) {
+function showLegacyFlowPreview(message) {
   const view=flowPreviewViews.get(message.index);
   if(!view||view.token!==message.previewId)return;
   if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
@@ -926,7 +988,7 @@ window.addEventListener('message', async event => {
     case 'flowProposal':
       lastRequest=lastModelRequest=undefined;layoutLocked=true;
       $('flowChat').querySelector('[data-flow-pending]')?.remove();
-      flowFields=message.fields||flowFields;
+      flowFields=message.fields||flowFields;flowRenderMode=message.renderMode||'components';
       hasFlowResponse = true;
       $('feedback').value = '';
       hasFlowDraft = message.states.length > 0;
@@ -955,6 +1017,7 @@ window.addEventListener('message', async event => {
       creatingApprovedStates=false;
       flowApproved = false;
       hasFlowDraft = false;
+      if(message.components){status('Добавлено вариантов компонентов: '+message.count);break;}
       status('Создано фреймов: ' + message.count + (message.skipped ? ' · Не удалось заполнить значений: ' + message.skipped : '') +
         (message.errorsPending ? ' · Ошибок в подписи под фреймом (нет свойства в компоненте): ' + message.errorsPending : ''));
       break;
