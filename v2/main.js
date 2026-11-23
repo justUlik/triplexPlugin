@@ -1,3 +1,594 @@
+// BEGIN GENERATED EDITORIAL POLICY
+// Edit v2/knowledge/editorial-policy.json, then run node v2/scripts/sync-editorial-policy.mjs.
+const editorialPolicy = {
+  "version": "2026-11-23.1",
+  "defaultProfile": "triplex",
+  "sources": [
+    {
+      "id": "triplex",
+      "title": "Текстовый стандарт СберБизнес / Triplex Super Text",
+      "version": "7.3.2",
+      "checkedOn": "2026-11-23",
+      "url": "https://triplex-design.ru/next/ru/Super/Text/release%20notes",
+      "limitations": "Страница «Тексты ошибок» находится на доработке и ссылается на внутренний каталог системных ошибок. Этот каталог не прочитан; стандартные согласованные ошибки не выдумывать. Выдержки основаны на текстовых узлах публичных разделов, а не на содержимом изображений."
+    },
+    {
+      "id": "sbol",
+      "title": "Редполитика СберБанк Онлайн",
+      "version": "v31 по имени файла; экспорт 2025-12-18",
+      "file": "Редполитика_СберБанк_Онлайн_v31_20251218_235603.pdf",
+      "sha256": "706bb29509dff8c41d34470c2de144eb67e99437895db3ba9a4a6e19a5e37f6a",
+      "pages": 78,
+      "limitations": "Внутренние ссылки из PDF не открывались. Самостоятельный промпт на страницах 49–51 рассматривается как материал по редактированию, а не инструкция менять протокол ответов плагина."
+    }
+  ],
+  "precedence": "Это справочник редактирования клиентских текстов. Сохраняй JSON-схему текущего запроса, доступные компоненты и бизнес-логику. Точные тексты из аналитики и вручную подтверждённые тексты не переписывай без просьбы пользователя. Для оформления новых текстов явно заданные пользователем правила канала важнее справочника; иначе применяй выбранный профиль; не смешивай противоречащие канальные правила.",
+  "profiles": {
+    "triplex": "Основной профиль для текущих форм Triplex / СберБизнес. Редполитика СБОЛ дополняет его общими принципами; канальное оформление берётся из Triplex.",
+    "sbol": "Для явно указанного продукта СберБанк Онлайн / СБОЛ. Его оформление имеет приоритет над канальными правилами Triplex."
+  },
+  "rules": [
+    {
+      "id": "plain-language",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Пиши просто и по делу: без канцелярита, штампов, причастных и деепричастных оборотов. Предпочитай короткие предложения и глаголы.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/вредные слова",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/вредные слова"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            7,
+            8,
+            47,
+            50
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tone",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Обращайся на «вы» со строчной буквы. Тон спокойный, вежливый и гендерно-нейтральный: без капслока, давления, обвинений, шуток в ошибках и лишних восклицаний.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "редполитика/с клиентом на «вы»",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/редполитика/с клиентом на «вы»"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            12,
+            42,
+            43,
+            50
+          ]
+        }
+      ]
+    },
+    {
+      "id": "letter-yo",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Ставь «ё» во всех словах, где она требуется.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/буква «ё»",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/буква «ё»"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            33,
+            50
+          ]
+        }
+      ]
+    },
+    {
+      "id": "truth",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Не выдумывай сроки, суммы, ограничения, причины ошибок и гарантии. Не обещай неподтверждённую помощь поддержки или результат следующего шага.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "редполитика/границы",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/редполитика/границы"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            9,
+            47,
+            62,
+            63
+          ]
+        }
+      ]
+    },
+    {
+      "id": "consistent-screen",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Используй единые названия, подписи и формулировки во всём сценарии; не повторяй одно и то же в заголовке и описании.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "компоненты интерфейса/статус",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/компоненты интерфейса/статус"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            9,
+            44,
+            45,
+            62
+          ]
+        }
+      ]
+    },
+    {
+      "id": "no-bank-pronouns",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Не добавляй лишние «мы», «наш», «свой»: называй объект или действие прямо. Избегай двусмысленных местоимений.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/вредные слова",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/вредные слова"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            35,
+            36,
+            50
+          ]
+        }
+      ]
+    },
+    {
+      "id": "numbers",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Используй запятую в дробной части. Суммы показывай цифрами, разряды больших чисел разделяй неразрывными пробелами; число и валюту не разрывай переносом.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/суммы",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/суммы"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            13,
+            24,
+            30,
+            51
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quotes",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Для русских названий используй «ёлочки». Названия латиницей не заключай в кавычки. Сохраняй точные названия продуктов.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/кавычки",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/кавычки"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            16,
+            37,
+            51
+          ]
+        }
+      ]
+    },
+    {
+      "id": "slash",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "В обычном тексте заменяй слэш на «и» или «или» по смыслу; не меняй разделители в номерах документов и обязательных форматах.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/косая черта",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/косая черта"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            18,
+            51
+          ]
+        }
+      ]
+    },
+    {
+      "id": "no-success-adverb",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "copy",
+        "states"
+      ],
+      "rule": "В статусах и уведомлениях не добавляй «успешно»: достаточно конкретного результата.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/вредные слова",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/вредные слова"
+        }
+      ]
+    },
+    {
+      "id": "labels-placeholders",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy"
+      ],
+      "rule": "Подписи называют данные поля. Для одинаковых полей используй одинаковые placeholders; подсказки делай краткими и понятными без лишнего контекста.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "компоненты интерфейса/поля ввода и выбора",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/компоненты интерфейса/поля ввода и выбора"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            44,
+            45
+          ]
+        }
+      ]
+    },
+    {
+      "id": "abbreviations",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Не вводи самодельные сокращения. Сохраняй общеупотребительные банковские термины ИНН, КПП, БИК, НДС и понятные единицы.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/сокращения",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/сокращения"
+        },
+        {
+          "id": "sbol",
+          "pages": [
+            32,
+            33
+          ]
+        }
+      ]
+    },
+    {
+      "id": "error-action",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "states"
+      ],
+      "rule": "Ошибка кратко объясняет, что произошло и что можно сделать дальше. Не обвиняй клиента, не дублируй заголовок и не ограничивайся «Что-то пошло не так». Советуй только доступное в сценарии действие.",
+      "sources": [
+        {
+          "id": "sbol",
+          "pages": [
+            61,
+            62,
+            63,
+            65,
+            71
+          ]
+        }
+      ]
+    },
+    {
+      "id": "validation",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "states"
+      ],
+      "rule": "В Description поля дай конкретное исправление: что ввести, выбрать или проверить. Для отсутствующего значения достаточно короткого действия с названием данных; для формата или диапазона используй только подтверждённое правило.",
+      "sources": [
+        {
+          "id": "sbol",
+          "pages": [
+            61,
+            62,
+            63,
+            64
+          ]
+        }
+      ]
+    },
+    {
+      "id": "service-error",
+      "profiles": [
+        "triplex",
+        "sbol"
+      ],
+      "scopes": [
+        "states"
+      ],
+      "rule": "При сбое сервиса уместна вежливая просьба и краткое извинение. Не называй произвольное время восстановления и не обещай, что повтор точно поможет.",
+      "sources": [
+        {
+          "id": "sbol",
+          "pages": [
+            61,
+            62,
+            63,
+            71
+          ]
+        }
+      ]
+    },
+    {
+      "id": "triplex-percent",
+      "profiles": [
+        "triplex"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Процент отделяй от числа пробелом, например 10 %. Не переноси знак на другую строку.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/пробел",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/пробел"
+        }
+      ]
+    },
+    {
+      "id": "triplex-period",
+      "profiles": [
+        "triplex"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Без точки: заголовки, подписи, кнопки, табличные названия и пояснения без действия/состояния. Полные предложения в ошибках и подсказках заканчивай точкой.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "главное о текстах/точки",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/главное о текстах/точки"
+        }
+      ]
+    },
+    {
+      "id": "triplex-hints-period",
+      "profiles": [
+        "triplex"
+      ],
+      "scopes": [
+        "copy",
+        "states"
+      ],
+      "rule": "Для поясняющего словосочетания в подсказке точка не нужна; для предложения с действием или состоянием нужна.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "компоненты интерфейса/подсказки",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/компоненты интерфейса/подсказки"
+        }
+      ]
+    },
+    {
+      "id": "triplex-terms",
+      "profiles": [
+        "triplex"
+      ],
+      "scopes": [
+        "catalog",
+        "copy"
+      ],
+      "rule": "Для СберБизнес: название поля «Эл. почта», в пояснении полная форма «электронная почта». Интернет, веб- и онлайн пиши кириллицей.",
+      "sources": [
+        {
+          "id": "triplex",
+          "section": "редполитика/кириллица и латиница",
+          "url": "https://triplex-design.ru/next/ru/Super/Text/редполитика/кириллица и латиница"
+        }
+      ]
+    },
+    {
+      "id": "sbol-percent",
+      "profiles": [
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Процент не отделяй пробелом: 10%. Не применяй противоположное правило Triplex к СБОЛ.",
+      "sources": [
+        {
+          "id": "sbol",
+          "pages": [
+            17,
+            51
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sbol-period",
+      "profiles": [
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Не ставь точку в конце последнего или единственного предложения интерфейсного текста, пунктов списка, заголовков и кнопок. Между предложениями точки сохраняй.",
+      "sources": [
+        {
+          "id": "sbol",
+          "pages": [
+            13,
+            14,
+            15,
+            51
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sbol-terms",
+      "profiles": [
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Пиши «СберБанк», «СберБанк Онлайн» без кавычек; «счёт», «кешбэк», «код из СМС», «деньги» вместо «денежные средства», конкретный платёж/перевод вместо общего «операция».",
+      "sources": [
+        {
+          "id": "sbol",
+          "pages": [
+            37,
+            52,
+            53,
+            54
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sbol-format",
+      "profiles": [
+        "sbol"
+      ],
+      "scopes": [
+        "catalog",
+        "copy",
+        "states"
+      ],
+      "rule": "Время — 24-часовой формат 08:30; дату показывай однозначно, например 3 апреля 2024 г. Не добавляй выдуманный часовой пояс.",
+      "sources": [
+        {
+          "id": "sbol",
+          "pages": [
+            19,
+            21,
+            51
+          ]
+        }
+      ]
+    }
+  ]
+};
+// END GENERATED EDITORIAL POLICY
+
 // BEGIN GENERATED TRIPLEX KNOWLEDGE
 // Edit knowledge/triplex-components.json, then run node scripts/sync-triplex-knowledge.mjs.
 const triplexKnowledge = {
@@ -1287,6 +1878,26 @@ function catalogInfo(catalog) {
   return `Каталог Pixso: ${catalog.length} компонентов; назначение сопоставлено: ${known}; требует уточнения: ${catalog.length - known}. Кнопки исключены.`;
 }
 
+function resolveEditorialProfile(task = '', standard = '') {
+  const explicit=String(standard).match(/(?:профиль|profile)\s*[:=]\s*(triplex|sbol|сбол)/i)?.[1].toLowerCase();
+  if(explicit)return explicit==='сбол'?'sbol':explicit;
+  return /СберБанк\s*Онлайн|СБОЛ/i.test(task)&&!/СберБизнес/i.test(task)?'sbol':editorialPolicy.defaultProfile;
+}
+function editorialContext(scope) {
+  const task=prepared?.task || approvedSource?.task || '';
+  const standard=prepared?.standard || approvedSource?.standard || '';
+  const profile=resolveEditorialProfile(task,standard);
+  return JSON.stringify({editorialPolicy:{
+    version:editorialPolicy.version,profile,
+    sourceVersions:editorialPolicy.sources.map(({id,version})=>({id,version})),
+    appliesTo:'Правила относятся к клиентским подписям, placeholders, Description и текстам состояний/ошибок. Это не инструкции менять формат ответа, добавлять кнопки или переписывать подтверждённые тексты.',
+    precedence:editorialPolicy.precedence,
+    channel:editorialPolicy.profiles[profile],
+    rules:editorialPolicy.rules.filter(rule=>rule.profiles.includes(profile)&&rule.scopes.includes(scope)).map(({id,rule})=>({id,rule})),
+    limitation:scope==='states'?'Внутренний каталог системных ошибок Triplex не прочитан. Предлагаемые тексты не выдавай за дословные согласованные системные сообщения.':undefined
+  }});
+}
+
 function withTriplexKnowledge(prompt, catalog, scope = 'catalog') {
   const rules = scope === 'catalog' ? [
     'СПРАВОЧНИК TRIPLEX. Это знания о назначении компонентов, а не список доступных экземпляров.',
@@ -1304,7 +1915,7 @@ function withTriplexKnowledge(prompt, catalog, scope = 'catalog') {
     scope==='copy' ? 'Настрой только тексты текущего компонента. Ошибки и состояния будут согласованы после верстки.' : 'Предложи состояния только для компонентов закреплённого экрана. Не меняй их состав. Неподтвержденные бизнес-правила помечай как гипотезы.',
     'Соблюдай текстовый стандарт и указания пользователя. Ответь только запрошенным JSON; пояснение краткое.'
   ].join('\n');
-  const base = prompt + '\n' + rules;
+  const base = prompt + '\n' + rules + '\n' + editorialContext(scope);
   // Never silently cut actual Pixso IDs or conversation to make room for documentation.
   if (base.length > 46500) throw new Error('Каталог и диалог превышают лимит контекста. Сократите описание или начните новый подбор. Компоненты не были скрыты из каталога.');
   const available = new Set(catalog.map(item => item.knowledgeName).filter(Boolean));
@@ -1465,6 +2076,7 @@ function requestFlow({ requirements, feedback, standard, selection, edits, mode 
     'Проверь применимость: пустое обязательное поле, формат, диапазон, зависимости полей, недоступные данные, сеть, сервер, загрузка, успех, disabled и read-only. Не ограничивайся одной ошибкой. Неподтвержденные бизнес-правила помечай в condition как гипотезы для согласования; не выдумывай числовые ограничения.',
     'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
     'Верни только JSON: {"reply":"Объяснение","states":[{"name":"Название","condition":"Когда показать","values":{"field-id":"значение"},"variants":[{"field":"field-id","variant":"точное имя доступного варианта"}],"properties":[{"field":"field-id","values":{"точный ключ BOOLEAN/TEXT из properties":true}}],"errors":[{"field":"field-id или пустая строка для формы","text":"Текст ошибки"}]}]}.',
+    'Для каждого состояния обязательно укажи name и condition. Если нет значений/ошибок, передай values:{} и errors:[], без null. field копируй из fields.field, не из номера каталога или позиции строки.',
     'Дай до 24 релевантных состояний. properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields и варианты из variants. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
     'fields — фактически подтверждённые компоненты с холста, их назначение, текущие свойства и доступные варианты. confirmedTask и decisions — исходная задача и решения пользователя. Следуй им; не возвращай удалённые или заменённые компоненты.',
     'Не предлагай ввод для компонента отображения Amount/Text. Учитывай поведение компонента: не предлагай невозможные действия (например ввод букв, если поле их отфильтровывает). Не меняй размер или тему ради ошибки. Используй только точные варианты из fields.',
@@ -1522,7 +2134,7 @@ function requestFlowRepair(message,error) {
   if(message?.type!=='reviewFlow'||!pendingFlow||pendingFlow.repairAttempted)return false;
   const source=lockedSource();pendingFlow.repairAttempted=true;
   send('flowRequest',{repairing:true,prompt:[
-    'Исправь ответ о состояниях формы. Верни только JSON {reply,states:[{name,condition,values:{},variants:[],properties:[],errors:[]}]}.',
+    'Исправь ответ о состояниях формы. Верни только JSON {"reply":"Краткое пояснение","states":[{"name":"Название","condition":"Когда показать","values":{},"variants":[],"properties":[],"errors":[]}]}. Все field копируй из fields.field как строки; для общей ошибки формы используй field:"". Не подставляй ID типа из каталога.',
     'Ошибка проверки: '+(error.message||String(error)),
     'Используй только реальные field, точные variants и свойства BOOLEAN/TEXT из fields. Не меняй размер/тему. Description содержит текст ошибки; отдельно нужен доступный error-variant/BOOLEAN. Раскрытие и активность допустимы только при доступном свойстве/варианте. Если реализация недоступна, объясни это в reply, не имитируй её пустой копией.',
     JSON.stringify({...pendingFlow,confirmedTask:approvedSource.task,fields:confirmedFlowFields(source),invalidResponse:typeof message.raw==='string'?message.raw.slice(0,12000):''})
@@ -1530,19 +2142,67 @@ function requestFlowRepair(message,error) {
   return true;
 }
 
+function statePlanError(path,detail) {
+  const error=new Error('План состояний: '+path+' — '+detail+'.');
+  error.code='MODEL_STATE_PLAN';
+  return error;
+}
+function statePlanObject(value,path) {
+  if(!value||typeof value!=='object'||Array.isArray(value))throw statePlanError(path,'ожидается объект');
+  return value;
+}
+function normalizeStatePlan(plan,nodes) {
+  statePlanObject(plan,'ответ');
+  if(!Array.isArray(plan.states))throw statePlanError('states','ожидается список состояний');
+  if(plan.states.length>24)throw statePlanError('states','получено '+plan.states.length+' состояний при лимите 24');
+  const fieldId=(value,path,form=false)=>{
+    const id=value==null&&form?'':typeof value==='number'&&Number.isSafeInteger(value)?String(value):typeof value==='string'?value.trim():undefined;
+    if(id===undefined||(!nodes.has(id)&&!(form&&id==='')))throw statePlanError(path,'неизвестный field; используйте идентификатор из fields');
+    return id;
+  };
+  const string=(value,path,allowEmpty=false)=>{
+    if(typeof value!=='string'||value.length>3000||(!allowEmpty&&!value.trim()))throw statePlanError(path,'ожидается '+(allowEmpty?'строка':'непустая строка')+' до 3000 символов');
+    return value;
+  };
+  const list=(value,path,map)=>{
+    if(value==null)return [];
+    if(Array.isArray(value))return value;
+    return Object.entries(statePlanObject(value,path)).map(map);
+  };
+  const states=plan.states.map((input,index)=>{
+    const path='states['+(index+1)+']';statePlanObject(input,path);
+    const state={...input,name:string(input.name??input.title,path+'.name'),condition:string(input.condition??input.when,path+'.condition',true)};
+    const values=input.values==null?{}:input.values;
+    statePlanObject(values,path+'.values');state.values={};
+    for(const [id,value] of Object.entries(values)) {
+      const key=fieldId(id,path+'.values['+id+']');
+      if(Object.prototype.hasOwnProperty.call(state.values,key))throw statePlanError(path+'.values','повторный field '+key);
+      if(typeof value!=='string'&&!(typeof value==='number'&&Number.isFinite(value)))throw statePlanError(path+'.values['+id+']','значение должно быть текстом или числом');
+      state.values[key]=string(String(value),path+'.values['+id+']',true);
+    }
+    state.variants=list(input.variants,path+'.variants',([field,variant])=>({field,variant})).map((choice,j)=>{
+      const itemPath=path+'.variants['+(j+1)+']';statePlanObject(choice,itemPath);
+      return {...choice,field:fieldId(choice.field,itemPath+'.field'),variant:string(choice.variant,itemPath+'.variant')};
+    });
+    state.properties=list(input.properties,path+'.properties',([field,values])=>({field,values})).map((patch,j)=>{
+      const itemPath=path+'.properties['+(j+1)+']';statePlanObject(patch,itemPath);statePlanObject(patch.values,itemPath+'.values');
+      return {...patch,field:fieldId(patch.field,itemPath+'.field'),values:{...patch.values}};
+    });
+    state.errors=list(input.errors,path+'.errors',([field,text])=>({field,text})).map((error,j)=>{
+      const itemPath=path+'.errors['+(j+1)+']';statePlanObject(error,itemPath);
+      if(error.text!==undefined&&error.message!==undefined&&error.text!==error.message)throw statePlanError(itemPath,'text и message противоречат друг другу');
+      return {...error,field:fieldId(error.field,itemPath+'.field',true),text:string(error.text??error.message,itemPath+'.text')};
+    });
+    return state;
+  });
+  return {...plan,reply:plan.reply==null?'Предлагаю состояния для компонентов на макете.':string(plan.reply,'reply',true),states};
+}
+
 function reviewFlow({ raw }) {
   const source = lockedSource();
   if (!pendingFlow || typeof raw !== 'string' || raw.length > 40000) throw new Error('Некорректный ответ GigaCode.');
-  const plan = parseModelResponse(raw);
   const nodes = new Map(sourceFields(source).map(node=>[node.getPluginData('triplex-field-id'),node]));
-  const ids = new Set(nodes.keys());
-  if (typeof plan?.reply !== 'string' || !Array.isArray(plan.states) || plan.states.length > 24 ||
-      plan.states.some(state => typeof state?.name !== 'string' || !state.name.trim() ||
-        typeof state.condition !== 'string' || !state.values || typeof state.values !== 'object' ||
-        Array.isArray(state.values) || Object.entries(state.values).some(([key, value]) => !ids.has(key) || typeof value !== 'string') ||
-        (state.variants !== undefined && (!Array.isArray(state.variants) || state.variants.some(v => !ids.has(v.field) || typeof v.variant !== 'string'))) ||
-        !Array.isArray(state.errors) || state.errors.some(error => typeof error?.field !== 'string' || (error.field && !ids.has(error.field)) ||
-          typeof error.text !== 'string' || !error.text.trim()))) throw new Error('GigaCode вернул некорректный план сценария.');
+  const plan = normalizeStatePlan(parseModelResponse(raw),nodes);
   completeInteractionStates(plan,nodes);
   for(const state of plan.states) validateStateBindings(state,nodes);
   flow = { ...pendingFlow, states: plan.states, reply: plan.reply };

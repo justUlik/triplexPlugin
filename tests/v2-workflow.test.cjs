@@ -7,7 +7,10 @@ const source = fs.readFileSync(require.resolve('./workflow.test.cjs'), 'utf8')
   .replace('opening component settings does not instantiate or export preview until requested',
     'opening component settings requests automatic preview without blocking UI')
   .replace('app.messages.at(-1).item.previewDeferred,true', 'app.messages.at(-1).item.previewDeferred,false')
-  .replace('assert.equal(settings.constraint.value,0.4)', 'assert.equal(settings.constraint.value,640/2400)');
+  .replace('assert.equal(settings.constraint.value,0.4)', 'assert.equal(settings.constraint.value,640/2400)')
+  // Measure component-document scoping separately from the shared editorial context.
+  .replace('assert.ok(scoped.prompt.length<full*0.15);',
+    `assert.ok(scoped.prompt.length - run('editorialContext("copy").length') < (full - run('editorialContext("catalog").length')) * 0.15);`);
 module._compile(source + `
  test('v2 back from ready reopens last item and preserves draft going back',async()=>{
    const app=revisionFixture();await seedB2B(app);
@@ -227,5 +230,76 @@ module._compile(source + `
    await app.run('applyStateToCopy(copy,{condition:"Проверка",values:{},errors:[{field:"1",text:"Первая ошибка"},{field:"1",text:"Вторая ошибка"}]},pixso.getNodeById("source"))');
    assert.equal(field.componentProperties['Description#1'].value,['Первая ошибка','Вторая ошибка'].join(String.fromCharCode(10)));
    assert.equal(field.componentProperties['HideError#1'].value,false);
+ });
+
+ test('state plans normalize omitted empty fields, numeric identifiers and numeric input values',async()=>{
+   const app=statePreviewFixture();
+   await app.run('requestStates({mode:"auto",standard:""})');
+   await app.run('reviewFlow({raw:JSON.stringify({states:[{name:"Количество",condition:"Ввод",values:{"1":25}},{name:"Пустое количество",condition:"Отправка",errors:[{field:1,message:"Введите количество"}]}]})})');
+   assert.equal(app.messages.at(-1).type,'flowProposal');
+   assert.equal(app.run('flow.states[0].values["1"]'),'25');
+   assert.equal(app.run('flow.states[0].errors.length'),0);
+   assert.equal(app.run('flow.states[1].errors[0].field'),'1');
+   assert.equal(app.run('flow.states[1].errors[0].text'),'Введите количество');
+   assert.equal(app.run('typeof flow.reply'),'string');
+ });
+ test('state property maps and null optional collections are accepted without guessing fields',async()=>{
+   const app=statePreviewFixture();app.source.children[0].componentProperties['Active#1']={type:'BOOLEAN',value:false};
+   app.run('approvedSource.signature=layoutSignature(pixso.getNodeById("source"))');
+   await app.run('requestStates({mode:"auto",standard:""})');
+   await app.run('reviewFlow({raw:JSON.stringify({reply:"Варианты",states:[{title:"Активное поле",when:"Ввод",values:null,variants:null,properties:{"1":{"Active#1":true}},errors:null},{name:"Ошибка",condition:"Пусто",errors:{"1":"Введите количество"}}]})})');
+   assert.equal(app.messages.at(-1).type,'flowProposal');
+   assert.equal(app.run('flow.states[0].properties[0].field'),'1');
+   assert.equal(app.run('flow.states[0].properties[0].values["Active#1"]'),true);
+   assert.equal(app.run('flow.states[1].errors[0].text'),'Введите количество');
+ });
+ test('invalid state references produce actionable field paths and one repair rather than a generic error',async()=>{
+   const app=statePreviewFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   app.run('let badPlan=JSON.stringify({reply:"Варианты",states:[{name:"Ошибка",condition:"Пусто",values:{"999":"10"},errors:[]}]})');
+   await app.run('handleCommand({type:"reviewFlow",raw:badPlan})');
+   assert.equal(app.messages.at(-1).type,'flowRequest');assert.match(app.messages.at(-1).prompt,/states\\[1\\]\\.values\\[999\\]/);
+   await app.run('handleCommand({type:"reviewFlow",raw:badPlan})');
+   assert.equal(app.messages.at(-1).type,'error');assert.match(app.messages.at(-1).message,/неизвестный field/);
+   assert.equal(app.source.children[0].componentProperties['Value#1'].value,'10');
+ });
+ test('conflicting error text and missing conditions remain errors with an exact path',async()=>{
+   const app=statePreviewFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   assert.throws(()=>app.run('reviewFlow({raw:JSON.stringify({states:[{name:"Ошибка",condition:"Пусто",errors:[{field:1,text:"Один",message:"Другой"}]}]})})'),/text и message/);
+   assert.throws(()=>app.run('reviewFlow({raw:JSON.stringify({states:[{name:"Ошибка",values:{"1":"20"}}]})})'),/condition/);
+ });
+
+ test('editorial rules reach every GigaCode request without changing the response schema',()=>{
+   const app=backend();
+   app.run('prepared={task:"Форма инвестирования",standard:"",catalog:[]}');
+   for(const type of ['prepared','dialogRequest','copyRequest','flowRequest']) {
+     app.run('send("'+type+'",{prompt:"Верни JSON {items:[]}"})');
+     const message=app.messages.at(-1);
+     const policy=JSON.parse(message.prompt.split(String.fromCharCode(10)).find(line=>line.startsWith('{"editorialPolicy"'))).editorialPolicy;
+     assert.equal(policy.profile,'triplex');assert.equal(policy.sourceVersions.length,2);
+     assert.ok(policy.rules.some(rule=>rule.id==='letter-yo'));
+     assert.ok(policy.rules.some(rule=>rule.id==='triplex-percent'));
+     assert.equal(policy.rules.some(rule=>rule.id==='sbol-percent'),false);
+     assert.match(policy.appliesTo,/не инструкции менять формат ответа/);
+     assert.match(message.prompt,/Верни JSON/);
+     assert.ok(message.prompt.length<=48000);
+   }
+ });
+ test('SBOL channel formatting is isolated and can be selected explicitly',()=>{
+   const app=backend();
+   assert.equal(app.run('resolveEditorialProfile("Форма в СберБанк Онлайн","")'),'sbol');
+   assert.equal(app.run('resolveEditorialProfile("Форма для СберБизнес","")'),'triplex');
+   assert.equal(app.run('resolveEditorialProfile("Форма","Профиль: sbol")'),'sbol');
+   app.run('prepared={task:"Форма в СберБанк Онлайн",standard:""}');
+   const policy=JSON.parse(app.run('editorialContext("states")')).editorialPolicy;
+   assert.equal(policy.profile,'sbol');
+   assert.ok(policy.rules.some(rule=>rule.id==='sbol-period'));
+   assert.equal(policy.rules.some(rule=>rule.id==='triplex-period'),false);
+   assert.match(policy.precedence,/Точные тексты из аналитики/);
+   assert.ok(policy.rules.some(rule=>rule.id==='validation'));
+ });
+ test('editorial context is bounded and every rule has traceable source references',()=>{
+   const app=backend();
+   for(const scope of ['catalog','copy','states'])assert.ok(app.run('editorialContext("'+scope+'").length')<4000);
+   assert.equal(app.run('editorialPolicy.rules.every(rule=>rule.sources.length>0&&rule.sources.every(source=>editorialPolicy.sources.some(item=>item.id===source.id)))'),true);
  });
 `, __filename);
