@@ -72,11 +72,11 @@
   #sizeToggle[aria-expanded=true] #sizeIcon{transform:translateY(3px) rotate(225deg)} #sizeToggle:disabled #sizeIcon{border:0;font-size:16px;transform:none;width:20px;height:auto}
   #listActions>label{margin-bottom:16px} textarea{resize:none} .remove-component{font-family:Arial,sans-serif}
 
-  #listActions{display:grid;grid-template-columns:max-content max-content;gap:16px;align-items:start}
+  #listActions{display:grid;width:100%;min-width:0;grid-template-columns:max-content minmax(0,1fr);gap:16px;align-items:start}
   #listActions>label{grid-column:1 / -1;width:100%;margin:0}
-  #listActions>button{margin:0;white-space:nowrap}
+  #listActions>button{margin:0;white-space:nowrap;justify-self:start}
   #listActions[data-waiting=true]{display:none}
-  .remove-component{font-family:'SF Pro','SF Pro Display',sans-serif;font-size:18px;font-weight:400;font-variant-emoji:text}
+  .remove-component{display:flex;align-items:center;justify-content:center}.remove-component svg{display:block;flex:none}
 </style>
 </head>
 <body>
@@ -478,7 +478,17 @@ function removeComponentButton(item) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'remove-component';
-  button.textContent = '\u{100212}'; // SF Pro: trash.fill
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 16 20');
+  icon.setAttribute('width', '14');
+  icon.setAttribute('height', '18');
+  icon.setAttribute('fill', 'currentColor');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('focusable', 'false');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M5.5 0h5A1.5 1.5 0 0 1 12 1.5V3h3.25a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1 0-1.5H4V1.5A1.5 1.5 0 0 1 5.5 0Zm0 3h5V1.5h-5V3ZM1.5 6h13l-.8 12.1A2 2 0 0 1 11.7 20H4.3a2 2 0 0 1-2-1.9L1.5 6Zm3.75 2a.65.65 0 0 0-.65.68l.4 8a.65.65 0 1 0 1.3-.06l-.4-8A.65.65 0 0 0 5.25 8ZM8 8a.65.65 0 0 0-.65.65v8a.65.65 0 1 0 1.3 0v-8A.65.65 0 0 0 8 8Zm2.75 0a.65.65 0 0 0-.65.62l-.4 8a.65.65 0 1 0 1.3.06l.4-8a.65.65 0 0 0-.65-.68Z');
+  icon.appendChild(path);
+  button.appendChild(icon);
   button.title = 'Убрать «' + item.text + '» из набора';
   button.setAttribute('aria-label', button.title);
   button.hidden = historyReadOnly || !Number.isInteger(item.uid) || !['list','copy','ready'].includes(stage);

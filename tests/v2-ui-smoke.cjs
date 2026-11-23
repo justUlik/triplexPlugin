@@ -14,7 +14,8 @@ await receive({type:'proposal',items:[{uid:1,text:'Количество ЦФА',
 await page.screenshot({path:'/tmp/v2-proposal.png'});
 assert.equal(await page.locator('#listActions button:visible').count(),2);
 const actionBoxes=await page.locator('#listActions button:visible').evaluateAll(buttons=>buttons.map(b=>b.getBoundingClientRect().y));assert.equal(actionBoxes[0],actionBoxes[1]);
-assert.equal(await page.locator('.remove-component').first().textContent(),'\u{100212}');
+assert.equal(await page.locator('.remove-component svg path').count(),2);
+const widths=await page.evaluate(()=>({container:document.getElementById('plan').getBoundingClientRect().width,field:document.querySelector('#listActions>label').getBoundingClientRect().width}));assert.equal(widths.field,widths.container);
 await page.fill('#revision','Убери сумму');await page.click('#revise');
 assert.equal(await page.locator('#items').isVisible(),false);assert.equal(await page.locator('#listActions').isVisible(),false);assert.equal(await page.locator('#componentChat').isVisible(),true);
 await receive({type:'proposal',items:[{uid:1,text:'Количество ЦФА',name:'NumberField'}],reply:'Сумма удалена',revisionPending:false});assert.equal(await page.locator('#componentChat').isVisible(),true);assert.equal(await page.locator('#items').isVisible(),true);assert.equal(await page.locator('#listActions button:visible').count(),2);
