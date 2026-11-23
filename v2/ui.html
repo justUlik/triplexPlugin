@@ -77,6 +77,7 @@
   #listActions>button{margin:0;white-space:nowrap;justify-self:start}
   #listActions[data-waiting=true]{display:none}
   .remove-component{display:flex;align-items:center;justify-content:center}.remove-component svg{display:block;flex:none}
+  #items .component-preview img{margin:16px 0;object-position:left center}
 </style>
 </head>
 <body>
@@ -739,22 +740,19 @@ $('openProperties').onclick = () => {
 };
 function renderItem(index, item) {
   const card = document.createElement('li');
-  const heading = document.createElement('strong');
-  const kind=document.createElement('span');kind.className='component-name';kind.textContent=item.name;
-  const title=document.createElement('span');title.textContent=item.text;
-  heading.append(kind,title);
-  card.appendChild(heading);
-  card.appendChild(removeComponentButton(item));
   const actions = document.createElement('p');
   card.appendChild(actions);
   const preview = document.createElement('div');
+  preview.className='component-preview';
   card.appendChild(preview);
   replacePreview = result => {
     clearTimeout(imageTimer);
     activePreviewId = result.pending ? result.previewId : undefined;
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = undefined;
-    preview.replaceChildren();
+    if (!result.pending) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = undefined;
+      preview.replaceChildren();
+    } else preview.querySelector('[data-preview-status]')?.remove();
     if (result.png?.length) {
       const image = document.createElement('img');
       image.alt = 'Превью ' + result.name;
@@ -770,15 +768,11 @@ function renderItem(index, item) {
       note.textContent = result.pending ? 'Готовлю превью…' : 'Превью недоступно' + (result.previewError ? ' — ' + result.previewError : '');
       preview.appendChild(note);
       if (result.pending) {
-        if(result.previewDeferred) {
-          note.textContent='Превью загружается по кнопке «Обновить превью», чтобы не нагружать Pixso.';
-          return;
-        }
         previewStage = 'Создан экземпляр, ожидаю подготовку';
         post('renderPreview', { previewId: result.previewId });
         imageTimer = setTimeout(() => {
         post('cancelPreview', { previewId: result.previewId });
-        replacePreview({ previewError: 'Остановилось на этапе «' + previewStage + '». Нажмите «Обновить превью», чтобы повторить.' });
+        replacePreview({ previewError: 'Остановилось на этапе «' + previewStage + '». Измените свойство, чтобы повторить загрузку.' });
         }, 20000);
       }
     }
@@ -826,23 +820,11 @@ function renderItem(index, item) {
     hint.textContent = 'На фрейме останется текст компонента. Чтобы заполнить поле, проверьте вариант и свойства.';
     card.appendChild(hint);
   }
-  if (stage === 'copy') {
-    if (fields.size && item.copy.length) {
-      const hint = document.createElement('p');
-      hint.className = 'hint';
-      hint.textContent = 'Впишите подходящие предложения из чата прямо в свойства компонента.';
-      card.insertBefore(hint, settings);
-    }
-  }
   const confirm = document.createElement('button');
   confirm.type = 'button';
   confirm.textContent = 'Подтвердить';
   confirm.className='primary';
   actions.appendChild(confirm);
-  const refresh = document.createElement('button');
-  refresh.type = 'button';
-  refresh.textContent = 'Обновить превью';
-  card.appendChild(refresh);
   const back=document.createElement('button');back.type='button';back.textContent='Назад';
   back.onclick=()=>{if(!busy){setBusy(true);post('backComponent',{draft:readDraft?.()});}};
   actions.appendChild(back);
@@ -851,7 +833,9 @@ function renderItem(index, item) {
     if (event.target === variant) return;
     clearTimeout(previewTimer);
     scheduleSessionSave();
-    refresh.textContent='Обновить превью · есть правки';
+    if(activePreviewId) post('cancelPreview',{previewId:activePreviewId});
+    activePreviewId=undefined;clearTimeout(imageTimer);
+    previewTimer=setTimeout(()=>{if(stage==='copy' && card.isConnected && !busy) post('previewItem',{...readDraft(),live:true});},300);
   });
   variant.onchange = () => {
     clearTimeout(previewTimer);
@@ -869,11 +853,10 @@ function renderItem(index, item) {
     setBusy(true);
     post(type, readDraft());
   };
-  refresh.onclick = () => sendValues('previewItem');
   confirm.onclick = () => {
     const details = Array.from(fields, ([key, input]) => key.replace(/#.*$/, '') + ' — ' +
       (input.type === 'checkbox' ? (input.checked ? 'включено' : 'выключено') : input.value));
-    addMessage('componentChat', 'Вы', heading.textContent + '\n' + details.join('\n'));
+    addMessage('componentChat', 'Вы', item.text + '\n' + details.join('\n'));
     sendValues('confirmItem');
   };
   if(!item.previewId) post('previewItem',readDraft());

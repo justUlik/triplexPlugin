@@ -22,6 +22,12 @@ await receive({type:'proposal',items:[{uid:1,text:'Количество ЦФА',
 await page.click('#openProperties');await receive({type:'componentOpened',index:0,total:1,item:{uid:1,name:'NumberField',text:'Количество ЦФА',variants:['Default'],variant:0,fields:[{key:'Label',type:'TEXT',value:'Количество ЦФА'}],copy:[],previewId:42,previewDeferred:false}});
 assert.equal(await page.evaluate(()=>sent.some(m=>m.type==='renderPreview'&&m.previewId===42)),true);
 await receive({type:'previewRendered',item:{previewId:42,name:'NumberField',png:Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=','base64'))}});
+assert.equal(await page.locator('#items>li>strong').count(),0);
+assert.equal(await page.getByRole('button',{name:/Обновить превью/}).count(),0);
+assert.equal(await page.getByText('Впишите подходящие предложения из чата прямо в свойства компонента.').count(),0);
+await page.fill('#items input[type=text]','Новое количество');
+await page.waitForFunction(()=>sent.some(m=>m.type==='previewItem'&&m.live&&m.values.Label==='Новое количество'));
+assert.equal(await page.locator('#items input[type=text]').inputValue(),'Новое количество');
 await page.screenshot({path:'/tmp/v2-properties.png'});
 await page.getByRole('button',{name:'Подтвердить',exact:true}).click();assert.equal(await page.evaluate(()=>sent.at(-1).type),'confirmItem');
 await receive({type:'readyToApply',items:[{uid:1,text:'Количество ЦФА',name:'NumberField'}]});await page.click('#backComponent');assert.equal(await page.evaluate(()=>sent.at(-1).type),'backComponent');
