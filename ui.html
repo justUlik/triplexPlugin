@@ -28,6 +28,7 @@
   #status { min-height: 20px; line-height: 1.4; }
   .message p { margin: 8px 0; }
   .message ul { margin: 8px 0; padding-left: 22px; }
+  .remove-component { float: right; margin-left: 12px; color: #a22222; font-size: 18px; line-height: 1; }
   .component-name { display: block; margin-top: 4px; overflow-wrap: anywhere; }
   #status.error { color: #a22222; }
 </style>
@@ -50,7 +51,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.1</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.3</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -391,6 +392,25 @@ $('keepCurrent').onclick = () => {
   post('discardRevision');
 };
 
+function removeComponentButton(item) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'remove-component';
+  button.textContent = '🗑';
+  button.title = 'Убрать «' + item.text + '» из набора';
+  button.setAttribute('aria-label', button.title);
+  button.hidden = historyReadOnly || !Number.isInteger(item.uid) || !['list','copy','ready'].includes(stage);
+  button.onclick = () => {
+    if (busy || historyReadOnly || revisionPending) return;
+    clearTimeout(previewTimer);
+    clearTimeout(imageTimer);
+    saveSessionUI();
+    setBusy(true);
+    post('removeItem', {uid:item.uid});
+  };
+  return button;
+}
+
 function renderProposal(items) {
   $('items').replaceChildren();
   for (const item of items) {
@@ -400,7 +420,7 @@ function renderProposal(items) {
     const type = document.createElement('span');
     type.className = 'component-name hint';
     type.textContent = item.name;
-    row.append(label, type);
+    row.append(label, type, removeComponentButton(item));
     $('items').appendChild(row);
   }
 }
@@ -562,6 +582,7 @@ function renderItem(index, item) {
   const heading = document.createElement('strong');
   heading.textContent = componentLine(item);
   card.appendChild(heading);
+  card.appendChild(removeComponentButton(item));
   const actions = document.createElement('p');
   card.appendChild(actions);
   const preview = document.createElement('div');
@@ -836,7 +857,7 @@ window.addEventListener('message', async event => {
       if (activePreviewId) post('cancelPreview', { previewId: activePreviewId });
       activePreviewId = undefined;
       stage = 'ready';
-      $('items').replaceChildren();
+      renderProposal(message.items || []);
       $('planTitle').textContent = 'Компоненты согласованы';
       status('');
       break;

@@ -452,3 +452,85 @@ test('history read-only mode permits browsing and new chat but prevents insertio
   assert.equal(get('newDialogue').disabled,false);
   assert.equal(get('items').children.length,1);
 });
+test('trash removes only the selected component, updates context and persists to history',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  app.run('prepared.revisionPending=false');
+  await app.run(`handleMessage({type:'removeItem',uid:3})`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.uid)')),[1,2,4,5,6,7]);
+  assert.equal(app.run('prepared.items.find(i=>i.uid===6).name'),'MaskedField');
+  assert.match(app.run('conversation.at(-2).text'),/uid=3/);
+  const second=historyFixture(app.storage);second.ctx.restoreId=app.run('sessionId');await second.run('restoreSession(restoreId)');
+  assert.equal(second.run('prepared.items.some(i=>i.uid===3)'),false);
+});
+test('trash from configuration or ready returns to updated set and can remove the last item',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  app.run(`prepared.revisionPending=false;prepared.stage='copy';prepared.items=[prepared.items[2]];removePlannedItem(3)`);
+  assert.equal(app.run('prepared.items.length'),0);
+  assert.equal(app.run('prepared.stage'),'list');
+  assert.equal(app.messages.at(-1).type,'proposal');
+  await assert.rejects(app.run('apply()'),/Сначала получите/);
+  assert.throws(()=>app.run('removePlannedItem(3)'),/уже удалён/);
+});
+test('trash is blocked during unresolved revisions',async()=>{
+  const app=revisionFixture();await seedB2B(app);
+  assert.throws(()=>app.run('removePlannedItem(3)'),/Сначала завершите/);
+  assert.equal(app.run('prepared.items.length'),7);
+});
+test('proposal cards include a trash button for actual component uid',async()=>{
+  const {get,receive}=ui();
+  await receive({type:'proposal',items:[{uid:3,text:'ИНН',name:'TextField'}]});
+  const button=get('items').children[0].children[2];
+  assert.equal(button.textContent,'🗑');
+  assert.equal(button.hidden,false);
+  assert.match(button.title,/ИНН/);
+});
+async function financeRemovalFixture() {
+  const app=revisionFixture();await seedB2B(app);
+  app.run(`prepared.revisionPending=false;prepared.catalog=[
+    {name:'Islands (R) / Island Basic Adaptive',knowledgeName:'Island'},
+    {name:'Typography (W) / Text View',knowledgeName:'Text'},
+    {name:'Number Field (R) / Number Field',knowledgeName:'NumberField'},
+    {name:'Select Field (R) / Select Field',knowledgeName:'SelectField'},
+    {name:'Amount (R) / Amount',knowledgeName:'Amount'}];
+    prepared.items=prepared.items.map((item,index)=>{
+      const ids=[1,2,3,2,4,2,5];const labels=['Форма','Количество ЦФА, шт.','Количество ЦФА, шт.','Кошелёк отправителя','Кошелёк отправителя','Сумма к оплате','Сумма к оплате'];
+      return {...item,id:ids[index],name:prepared.catalog[ids[index]-1].name,text:labels[index],optionExample:index===4?'Кошелёк • ID 123 • 100 ₽':''};
+    })`);
+  return app;
+}
+test('exact user deletion example removes Island and specified rows, preserving amount Text and wallet settings',async()=>{
+  const app=await financeRemovalFixture();
+  const wallet=app.run('JSON.stringify(prepared.items[4])');
+  const revision='Island убери\nКоличество ЦФА, шт.\nTypography (W) / Text View убери\nКошелёк отправителя\nTypography (W) / Text View убери\nСумма к оплате\nAmount (R) / Amount\nубери';
+  app.ctx.userRevision=revision;
+  await app.run('requestConversation({revision:userRevision})');
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.uid)')),[3,5,6]);
+  assert.equal(app.run('JSON.stringify(prepared.items.find(i=>i.uid===5))'),wallet);
+  assert.equal(app.messages.at(-1).type,'proposal');
+  assert.equal(app.messages.at(-1).changes.length,4);
+  assert.equal(app.messages.at(-1).changes.some(text=>text.startsWith('Обновлён')),false);
+  assert.equal(app.messages.some(message=>message.type==='dialogRequest'),false);
+});
+test('ambiguous deletion asks for clarification and does not apply other deletions partially',async()=>{
+  const app=await financeRemovalFixture();const before=app.run('JSON.stringify(prepared.items)');
+  await app.run(`requestConversation({revision:'Island убери\\nСумма к оплате убери'})`);
+  assert.equal(app.run('JSON.stringify(prepared.items)'),before);
+  assert.equal(app.messages.at(-1).type,'dialogReply');
+  assert.match(app.messages.at(-1).reply,/несколько компонентов/);
+  assert.equal(app.run('prepared.revisionPending'),true);
+});
+test('explicit all removes only the specified type, keeping non-text inputs',async()=>{
+  const app=await financeRemovalFixture();
+  await app.run(`requestConversation({revision:'убери все Text'})`);
+  assert.deepEqual(Array.from(app.run('prepared.items.map(i=>i.uid)')),[1,3,5,7]);
+});
+test('mixed edits are passed to model with distinction between label and type',async()=>{
+  const app=await financeRemovalFixture();
+  await app.run(`requestConversation({revision:'Убери Island и замени SelectField на SuggestField'})`);
+  // Mixed editing instructions still use the model; no speculative local mutation.
+  assert.equal(app.run('prepared.items.length'),7);
+  assert.equal(app.messages.at(-1).type,'dialogRequest');
+  assert.match(app.messages.at(-1).prompt,/Удаление Amount не означает удаление Text/);
+  await app.run(`requestConversation({revision:'Замени SelectField на SuggestField и убери Island'})`);
+  assert.equal(app.run('prepared.items.length'),7);
+});

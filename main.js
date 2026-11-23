@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.1' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.3' });
 
 function send(type, data) {
   if (['prepared', 'dialogRequest', 'copyRequest', 'flowRequest'].includes(type)) {
@@ -1411,7 +1411,7 @@ function sendPlanRequest(revision) {
     'Для заполняемых полей предложи вымышленное значение value по задаче. Плейсхолдер и значение — разные свойства. Если нужен пустой экран или компонент не принимает текстовое значение, пропусти value.',
     'Для текстовых полей предложи короткую подсказку по задаче. Используй точный плейсхолдер, если пользователь его указал. Для кнопок и чекбоксов пропусти placeholder.',
     'Не предлагай кнопки, ошибки и состояния: они согласуются отдельно после верстки. error всегда пустой.',
-    'Выбирай тип по назначению из справочника Triplex. Для каждого пункта в reply объясни, почему он подходит. Если нет подходящего экземпляра в Pixso, сообщи об этом; не подменяй его обычным полем.',
+    'Выбирай тип по назначению из справочника Triplex. В reply коротко поясни только важные решения в 2–4 пунктах, каждый с новой строки. Не повторяй весь набор и числовые ID: список компонентов покажет плагин. Если нужного экземпляра нет в Pixso, сообщи об этом; не подменяй его обычным полем.',
     'Для поля только для чтения укажи readOnly: true. Для списка кошельков укажи в optionExample короткий вымышленный пример пункта с именем, ID и балансом.',
     'Если есть revision, отредактируй текущий список по этим правкам и верни весь новый список. Сохрани позиции, которые пользователь не просил менять.',
     JSON.stringify({
@@ -1524,11 +1524,69 @@ async function review(raw) {
   if (!prepared.importOnly) send('proposal', { target: pixso.getNodeById(prepared.bodyId)?.name, items: previews, reply: plan.reply });
 }
 
-function requestConversation({ revision }) {
+function resolveRemovalRequest(revision, items, catalog) {
+  if (/(?:^|\s)(?:замени|заменить|добавь|добавить|оставь|не\s+(?:убирай|удаляй))/i.test(revision)) return null;
+  // Only a complete list of explicit removal commands is executed locally.
+  // Mixed edits, prose, negation and unsupported grammar remain model requests.
+  const blocks = [];
+  let pending = [];
+  const lines = revision.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const prefix = line.match(/^(?:убери|удали|убрать|удалить)\s+(.+?)[.!]?$/i);
+    const suffix = line.match(/^(.*?)\s*(?:убери|удали|убрать|удалить)[.!]?$/i);
+    if (prefix) {
+      if (pending.length) return null;
+      blocks.push([prefix[1]]);
+    } else if (suffix) {
+      if (suffix[1].trim()) pending.push(suffix[1].trim());
+      if (!pending.length || pending.length > 2) return null;
+      blocks.push(pending);pending=[];
+    } else {
+      pending.push(line);
+      if (pending.length > 2) return null;
+    }
+  }
+  if (pending.length || !blocks.length) return null;
+  const norm = text => String(text || '').toLowerCase().replace(/ё/g,'е').replace(/[«»“”"]/g,'').replace(/\s+/g,' ').trim();
+  const typeMatches = (item, target) => {
+    const doc = catalog[item.id-1]?.knowledgeName || componentKnowledge({name:item.name})?.name;
+    return norm(item.name) === norm(target) || (doc && norm(doc) === norm(target));
+  };
+  const selected = new Set();
+  const unresolved = [];
+  for (const block of blocks) {
+    let target = block.at(-1);
+    const all = /^все\s+/i.test(target);
+    if (all) target=target.replace(/^все\s+/i,'');
+    let matches;
+    if (block.length===2) matches=items.filter(item=>norm(item.text)===norm(block[0]) && typeMatches(item,target));
+    else {
+      matches=items.filter(item=>typeMatches(item,target));
+      if (!matches.length) matches=items.filter(item=>norm(item.text)===norm(target));
+    }
+    if (!matches.length || (matches.length>1 && !all)) {
+      unresolved.push(block.join(' · ') + (matches.length ? ' — несколько компонентов с таким названием' : ' — точное совпадение не найдено'));
+    } else for(const item of matches) selected.add(item.uid);
+  }
+  return { uids:[...selected], unresolved };
+}
+
+async function requestConversation({ revision }) {
   if (!prepared?.items || typeof revision !== 'string' || !revision.trim()) throw new Error('Введите сообщение.');
   prepared.labelRepairAttempted = false;
   prepared.revisionPending = true;
   conversation.push({ role: 'user', text: revision.trim() });
+  const removal = resolveRemovalRequest(revision, prepared.items, prepared.catalog);
+  if (removal) {
+    if (removal.unresolved.length) {
+      const reply='Пока ничего не удалено. Уточните компонент по подписи и типу либо используйте корзину:\n' + removal.unresolved.map(text=>'• '+text).join('\n');
+      conversation.push({role:'assistant',text:reply});
+      send('dialogReply',{reply,revisionPending:true});
+    } else {
+      await reviewListRevision({action:'list',reply:'',items:prepared.items.filter(item=>!removal.uids.includes(item.uid)).map(item=>({uid:item.uid}))});
+    }
+    return;
+  }
   const configuring = prepared.stage !== 'list';
   const definitions = {};
   const components = prepared.items.map(item => {
@@ -1548,6 +1606,8 @@ function requestConversation({ revision }) {
   });
   send('dialogRequest', { prompt: [
     'Ты согласуешь форму с пользователем. Учитывай всю историю и текущие настройки. Последняя просьба уточняет предыдущие.',
+    'Сначала сопоставь каждую просьбу с конкретным uid. Подпись text и тип name — разные признаки: одинаковая подпись может быть у Text, Amount и поля ввода. Пара строк «подпись / тип» обозначает один компонент. Удаление Amount не означает удаление Text с той же подписью. Удаление Island не означает удаление других строк набора: это плоский список, не дерево.',
+    'При просьбе только удалить не меняй подписи, типы, значения, примеры опций и настройки остальных строк. Верни оставшиеся строки как {uid}, не переписывай их целиком. Проверь, что учёл каждую просьбу, включая контейнеры. При неоднозначности задай вопрос вместо догадки.',
     'Ответь JSON: {"reply":"ответ пользователю","action":"reply|configure|list","updates":[{"uid":1,"variant":0,"values":{},"error":""}],"items":[{"uid":1}]}',
     'reply — вопрос или объяснение без изменений. configure — изменения свойств, текстов, ошибок любого существующего компонента.',
     'На этапе list правки подписей, подсказок, значений, readOnly и ошибок передавай в updates через text, placeholder, value, readOnly, error. На остальных этапах используй values и variant.',
@@ -1926,7 +1986,7 @@ function describeItem(item, suggest = false, showAllFields = false) {
   const placeholder = put('Плейсхолдер', key => /^(?:placeholder|плейсхолдер|заполнитель)(?:#|$)/i.test(key), item.placeholder);
   const value = put('Моковое значение', key => /^(?:value|input[ _-]?value|значение|введённый текст)(?:#|$)/i.test(key), item.value);
   return {
-    name: item.name, text: item.text, copy, error: item.error, fillKeys: item.fillKeys,
+    uid: item.uid, name: item.name, text: item.text, copy, error: item.error, fillKeys: item.fillKeys,
     readOnly: isReadOnly(item.variants[item.variant].name), requestedReadOnly: item.readOnly, optionExample: item.optionExample,
     missing: [!label && 'подпись', item.placeholder && !placeholder && 'плейсхолдер',
       item.value && !value && 'моковое значение'].filter(Boolean),
@@ -1971,7 +2031,7 @@ async function configureItem({ index, variant, values, error, live }, confirm, r
     prepared.index++;
     if (prepared.index === prepared.items.length) {
       prepared.stage = 'ready';
-      send('readyToApply');
+      send('readyToApply', { items: prepared.items.map(item => describeItem(item)) });
     } else {
       await openCurrentComponent();
     }
@@ -2292,6 +2352,21 @@ pixso.ui.onmessage = message => {
   messageQueue = messageQueue.then(() => handleMessage(message));
 };
 
+function removePlannedItem(uid) {
+  if (!prepared?.items || !['list','copy','ready'].includes(prepared.stage)) throw new Error('Удаление доступно до вставки компонентов на фрейм.');
+  if (prepared.revisionPending) throw new Error('Сначала завершите правки в чате или оставьте текущий набор.');
+  const index = prepared.items.findIndex(item => item.uid === uid);
+  if (index < 0) throw new Error('Компонент уже удалён или больше не входит в набор.');
+  const item = prepared.items[index];
+  activePreview?.cancel(); activePreview = undefined;
+  prepared.items = prepared.items.filter(candidate => candidate.uid !== uid);
+  prepared.stage = 'list'; prepared.index = 0;
+  const change = 'Удалён: ' + item.text + ' · ' + item.name;
+  conversation.push({ role:'user', text:'Убрать компонент «' + item.text + '» из набора (uid=' + uid + ').' });
+  conversation.push({ role:'assistant', text:change });
+  send('proposal', { target:pixso.getNodeById(prepared.bodyId)?.name, items:prepared.items.map(describe => describeItem(describe)), changes:[change], revisionPending:false });
+}
+
 async function handleCommand(message) {
   try {
     switch (message.type) {
@@ -2344,6 +2419,9 @@ async function handleCommand(message) {
       case 'placeLightbox':
         await placeLightbox(message.size);
         break;
+      case 'removeItem':
+        removePlannedItem(message.uid);
+        break;
       case 'discardRevision':
         if (prepared) {
           prepared.revisionPending = false;
@@ -2353,7 +2431,7 @@ async function handleCommand(message) {
         break;
       case 'dialog':
         if (message.draft && prepared?.stage === 'copy') await configureItem(message.draft, false, false);
-        requestConversation(message);
+        await requestConversation(message);
         break;
       case 'reviewDialog':
         await reviewConversation(message.raw);
