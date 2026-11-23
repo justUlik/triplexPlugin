@@ -71,6 +71,12 @@
   #sizeIcon{font-size:0;width:10px;height:10px;border-right:2px solid #949599;border-bottom:2px solid #949599;transform:translateY(-3px) rotate(45deg);margin-right:4px}
   #sizeToggle[aria-expanded=true] #sizeIcon{transform:translateY(3px) rotate(225deg)} #sizeToggle:disabled #sizeIcon{border:0;font-size:16px;transform:none;width:20px;height:auto}
   #listActions>label{margin-bottom:16px} textarea{resize:none} .remove-component{font-family:Arial,sans-serif}
+
+  #listActions{display:grid;grid-template-columns:max-content max-content;gap:16px;align-items:start}
+  #listActions>label{grid-column:1 / -1;width:100%;margin:0}
+  #listActions>button{margin:0;white-space:nowrap}
+  #listActions[data-waiting=true]{display:none}
+  .remove-component{font-family:'SF Pro','SF Pro Display',sans-serif;font-size:18px;font-weight:400;font-variant-emoji:text}
 </style>
 </head>
 <body>
@@ -162,6 +168,7 @@ let componentCount = 0;
 let stage = 'list';
 let wasRevised = false;
 let revisionPending = false;
+let confirmAfterDiscard = false;
 let flowApproved = false;
 let hasFlowDraft = false;
 let hasFlowResponse = false;
@@ -275,7 +282,7 @@ function setBusy(value) {
   $('unlockLayout').hidden = !layoutLocked;
   $('scenario').hidden = true;
   $('flowChoices').querySelectorAll('button,input,textarea').forEach(button => { button.disabled = value; });
-  $('retry').hidden = !lastRequest;
+  $('retry').hidden = !lastRequest || stage === 'list';
   $('retry').disabled = value;
   $('startForm').hidden = false;
   $('prepare').hidden = componentCount > 0;
@@ -286,13 +293,15 @@ function setBusy(value) {
   $('place').hidden = formPlaced || !selectedSize() || !$('status').classList.contains('error');
   $('plan').dataset.stage = stage;
   $('plan').dataset.revised = String(wasRevised);
+  $('items').hidden = stage === 'list' && wasRevised && value;
+  $('listActions').dataset.waiting = String(stage === 'list' && wasRevised && value);
   for(const id of ['prepare','revise','apply']) { $(id).classList.toggle('loading',value && !$(id).hidden); $(id).setAttribute('aria-busy',String(value)); }
   $('planTitle').textContent = stage === 'copy' ? 'Свойства компонентов' : stage === 'ready' ? 'Набор компонентов' : stage === 'done' ? 'Компоненты на макете' : wasRevised ? 'Доработки' : 'Предложенные компоненты';
   $('createStates').hidden = !hasSource || !flowApproved;
   $('items').querySelectorAll('input, select, textarea, button').forEach(control => { control.disabled = value; });
   $('openProperties').hidden = stage !== 'list';
-  $('openProperties').disabled = value || !componentCount || revisionPending;
-  $('keepCurrent').hidden = !revisionPending;
+  $('openProperties').disabled = value || !componentCount;
+  $('keepCurrent').hidden = true;
   $('keepCurrent').disabled = value;
   if (revisionPending) $('items').querySelectorAll('button').forEach(button => { button.disabled = true; });
   $('listActions').hidden = stage !== 'list';
@@ -469,7 +478,7 @@ function removeComponentButton(item) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'remove-component';
-  button.textContent = '🗑︎';
+  button.textContent = '\u{100212}'; // SF Pro: trash.fill
   button.title = 'Убрать «' + item.text + '» из набора';
   button.setAttribute('aria-label', button.title);
   button.hidden = historyReadOnly || !Number.isInteger(item.uid) || !['list','copy','ready'].includes(stage);
@@ -711,6 +720,8 @@ async function requestModel(prompt) {
 }
 
 $('openProperties').onclick = () => {
+  if(busy)return;
+  if(revisionPending){confirmAfterDiscard=true;setBusy(true);post('discardRevision');return;}
   setBusy(true);
   addMessage('componentChat', 'Вы', 'Подтвердить набор компонентов');
   status('Готовлю превью…');
@@ -938,6 +949,7 @@ window.addEventListener('message', async event => {
       break;
     case 'revisionDiscarded':
       revisionPending = false;
+      if(confirmAfterDiscard){confirmAfterDiscard=false;lastRequest=lastModelRequest=undefined;post('openProperties');return;}
       lastRequest = lastModelRequest = undefined;
       status('Оставлен текущий набор без последних правок.');
       break;

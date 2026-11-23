@@ -12,7 +12,12 @@ await page.click('#place');await receive({type:'formPlaced',size:'MD'});assert.e
 await page.fill('#token','test');await page.fill('#task','Форма инвестирования');await page.click('#prepare');assert.equal(await page.locator('#prepare').getAttribute('aria-busy'),'true');
 await receive({type:'proposal',items:[{uid:1,text:'Количество ЦФА',name:'NumberField'},{uid:2,text:'Сумма',name:'Amount'}]});assert.equal(await page.locator('#items>li').count(),2);assert.equal(await page.locator('#componentChat').isVisible(),false);
 await page.screenshot({path:'/tmp/v2-proposal.png'});
-await page.fill('#revision','Убери сумму');await page.click('#revise');await receive({type:'proposal',items:[{uid:1,text:'Количество ЦФА',name:'NumberField'}],reply:'Сумма удалена',revisionPending:false});assert.equal(await page.locator('#componentChat').isVisible(),true);
+assert.equal(await page.locator('#listActions button:visible').count(),2);
+const actionBoxes=await page.locator('#listActions button:visible').evaluateAll(buttons=>buttons.map(b=>b.getBoundingClientRect().y));assert.equal(actionBoxes[0],actionBoxes[1]);
+assert.equal(await page.locator('.remove-component').first().textContent(),'\u{100212}');
+await page.fill('#revision','Убери сумму');await page.click('#revise');
+assert.equal(await page.locator('#items').isVisible(),false);assert.equal(await page.locator('#listActions').isVisible(),false);assert.equal(await page.locator('#componentChat').isVisible(),true);
+await receive({type:'proposal',items:[{uid:1,text:'Количество ЦФА',name:'NumberField'}],reply:'Сумма удалена',revisionPending:false});assert.equal(await page.locator('#componentChat').isVisible(),true);assert.equal(await page.locator('#items').isVisible(),true);assert.equal(await page.locator('#listActions button:visible').count(),2);
 await page.click('#openProperties');await receive({type:'componentOpened',index:0,total:1,item:{uid:1,name:'NumberField',text:'Количество ЦФА',variants:['Default'],variant:0,fields:[{key:'Label',type:'TEXT',value:'Количество ЦФА'}],copy:[],previewId:42,previewDeferred:false}});
 assert.equal(await page.evaluate(()=>sent.some(m=>m.type==='renderPreview'&&m.previewId===42)),true);
 await receive({type:'previewRendered',item:{previewId:42,name:'NumberField',png:Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=','base64'))}});
