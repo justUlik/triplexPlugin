@@ -1144,7 +1144,7 @@ let activeFormId;
 let activeLibraryAssets;
 let activeLightboxComponent;
 
-pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.6' });
+pixso.showUI(__html__, { width: 880, height: 1360, title: 'Сборка экрана Triplex · 23.11.7' });
 
 function modelConversation(task = prepared?.task) {
   // The saved transcript is untouched. Older assistant prose repeats plans and
@@ -2620,7 +2620,7 @@ function sessionState() {
     if (prepared.items) plan.items = prepared.items.map(savedItem);
   }
   return { prepared: plan, conversation, itemSequence, flow, approvedSource, flowApproved,
-    activeFormId, activeLibraryAssets, activeLightboxComponent: nodeBinding(activeLightboxComponent) };
+    activeFormId, activeLibraryAssets:plan?.catalog || activeLibraryAssets, activeLightboxComponent: nodeBinding(activeLightboxComponent) };
 }
 function cleanSessionUI(value) {
   const result = {};
@@ -2735,6 +2735,10 @@ async function handleMessage(message) {
       if (message.type === 'newSession') { persistSession(); newSession(); send('sessionRestored',{ui:{},items:[],stage:'list'}); send('historyList',{sessions:readHistory().sessions}); }
     } catch(error) { send('historyError',{message:error.message}); }
     return;
+  }
+  if(message.type==='dialog' || message.type==='prepare') {
+    send('requestProgress',{message:'Pixso получил правки. Готовлю контекст для GigaCode…'});
+    if(message.ui && !sessionReadOnly) sessionUI=cleanSessionUI(message.ui);
   }
   if (sessionReadOnly) { send('error',{message:'Этот диалог открыт только для чтения. Восстановите исходный фрейм или начните новый диалог.'}); return; }
   if (message.type==='placeLightbox' && activeFormId && sessionId) {

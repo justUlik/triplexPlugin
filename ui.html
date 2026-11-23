@@ -58,7 +58,7 @@
   </select>
 </label>
 <button id="place" class="primary" type="button" disabled>Поставить</button>
-<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.6</p>
+<p class="hint">Выберите размер, чтобы активировать кнопку. Сборка UI 23.11.7</p>
 <section id="formSetup" hidden>
   <details id="modelSettings">
     <summary>Настройки GigaCode CLI</summary>
@@ -142,11 +142,21 @@ let transcript = [];
 let replayingHistory = false;
 let historyReadOnly = false;
 let currentSessionId;
-function saveSessionUI() {
-  if (replayingHistory || historyReadOnly) return;
-  post('saveSessionUI', { ui: { task:$('task').value, standard:$('standard').value, feedback:$('feedback').value,
+let sessionSaveTimer;
+function sessionUISnapshot() {
+  return { task:$('task').value, standard:$('standard').value, feedback:$('feedback').value,
     revision:$('revision').value, size:selectedSize(), transcript, hasFlowDraft, hasFlowResponse,
-    flowDecisions:[...flowDecisions], flowEdits, draft:stage==='copy' ? readDraft?.() : undefined } });
+    flowDecisions:[...flowDecisions], flowEdits, draft:stage==='copy' ? readDraft?.() : undefined };
+}
+function saveSessionUI() {
+  clearTimeout(sessionSaveTimer);sessionSaveTimer=undefined;
+  if (replayingHistory || historyReadOnly) return;
+  post('saveSessionUI', {ui:sessionUISnapshot()});
+}
+function scheduleSessionSave() {
+  clearTimeout(sessionSaveTimer);
+  if(replayingHistory || historyReadOnly)return;
+  sessionSaveTimer=setTimeout(saveSessionUI,500);
 }
 function renderHistory(sessions) {
   $('historyList').replaceChildren();
@@ -165,8 +175,9 @@ function renderHistory(sessions) {
 }
 $('refreshHistory').onclick=()=>{ if(!busy){saveSessionUI();post('listHistory');} };
 $('newDialogue').onclick=()=>{ if(!busy){saveSessionUI();setBusy(true);post('newSession');} };
-for(const id of ['task','standard','feedback','revision','lightboxSize']) $(id).addEventListener('input',saveSessionUI);
+for(const id of ['task','standard','feedback','revision','lightboxSize']) $(id).addEventListener('input',scheduleSessionSave);
 function restoreHistoryUI(message) {
+  clearTimeout(sessionSaveTimer);sessionSaveTimer=undefined;
   replayingHistory=true;
   try {
     resetPlan();clearFlow();
@@ -294,7 +305,8 @@ function finishPending(text) {
 }
 
 function sendRequest(type, data) {
-  saveSessionUI();
+  clearTimeout(sessionSaveTimer);sessionSaveTimer=undefined;
+  data={...data,ui:sessionUISnapshot()};
   lastRequest = { type, data };
   lastModelRequest = undefined;
   post(type, data);
@@ -353,7 +365,7 @@ $('revise').onclick = () => {
   setBusy(true);
   revisionPending = true;
   setBusy(true);
-  status('Обновляю предложение…');
+  status('Передаю правки в Pixso…');
   addMessage('componentChat', 'Вы', revision);
   showWorking();
   sendRequest('dialog', { revision, draft: readDraft?.() });
@@ -361,7 +373,7 @@ $('revise').onclick = () => {
 
 function addMessage(chat, author, text) {
   if (!text) return;
-  if (!replayingHistory && !['GigaChat работает…','Ответ получен. Проверяю и применяю в Pixso…'].includes(text)) transcript.push({chat,author,text:String(text)});
+  if (!replayingHistory && !['GigaChat работает…','Готовлю запрос в Pixso…','Ответ получен. Проверяю и применяю в Pixso…'].includes(text)) transcript.push({chat,author,text:String(text)});
   const item = document.createElement('li');
   item.className = 'message' + (author === 'Вы' ? ' user' : '');
   const name = document.createElement('strong');
@@ -391,7 +403,7 @@ function addMessage(chat, author, text) {
 }
 
 function showWorking() {
-  pendingMessage = addMessage('componentChat', 'GigaCode', 'GigaChat работает…');
+  pendingMessage = addMessage('componentChat', 'GigaCode', 'Готовлю запрос в Pixso…');
 }
 
 $('keepCurrent').onclick = () => {
@@ -533,7 +545,7 @@ function renderFlowChoices(states, labels = {}, savedEdits = flowEdits) {
       if(view.url){URL.revokeObjectURL(view.url);view.url=undefined;}
       imageArea.replaceChildren();previewText.textContent='Тексты или выбор изменены. Обновите превью.';
       previewButton.textContent='Обновить превью';
-      post('invalidateFlow');saveSessionUI();setBusy(false);
+      post('invalidateFlow');scheduleSessionSave();setBusy(false);
     }
     function editable(title,value,write,multiline=false) {
       const label=document.createElement('label');label.textContent=title;
@@ -601,6 +613,7 @@ let modelRequestNumber = 0;
 async function requestModel(prompt) {
   if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('Плагин сформировал пустой запрос.');
   if (prompt.length > 48000) throw new Error('Контекст диалога превышает лимит моста: ' + prompt.length + ' из 48000 символов. Запрос не отправлен.');
+  status('Запрос передан локальному мосту. Ожидаю ответ GigaCode…');
   let response;
   const requestNumber=++modelRequestNumber;
   const startedAt=Date.now();
@@ -751,7 +764,7 @@ function renderItem(index, item) {
   card.addEventListener('input', event => {
     if (event.target === variant) return;
     clearTimeout(previewTimer);
-    saveSessionUI();
+    scheduleSessionSave();
     previewTimer = setTimeout(() => {
       if (!busy && card.isConnected) post('previewItem', { ...readDraft(), live: true });
     }, 400);
@@ -790,6 +803,9 @@ window.addEventListener('message', async event => {
   if (typeof message.revisionPending === 'boolean') revisionPending = message.revisionPending;
   if (message.catalogInfo) { $('catalogInfo').textContent = message.catalogInfo; $('catalogInfo').hidden = false; }
   switch (message.type) {
+    case 'requestProgress':
+      status(message.message);
+      return;
     case 'historySaved':
       currentSessionId=message.sessionId;
       $('saveStatus').textContent='Все изменения сохранены в этом файле';

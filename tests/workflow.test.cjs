@@ -674,3 +674,30 @@ test('identical history snapshots do not rewrite file pluginData and changes sti
   const second=historyFixture(app.storage);second.ctx.savedId=app.run('sessionId');await second.run('restoreSession(savedId)');
   assert.equal(second.run('sessionUI.task'),'Изменено');
 });
+
+test('typing saves once after a pause and sending a revision cancels the pending save',()=>{
+  const {ctx,get}=ui();
+  const sent=[];const timers=new Map();let next=0;
+  ctx.parent.postMessage=message=>sent.push(message.pluginMessage);
+  ctx.setTimeout=callback=>{const id=++next;timers.set(id,callback);return id;};
+  ctx.clearTimeout=id=>timers.delete(id);
+  get('revision').value='Заменить компонент';
+  for(let i=0;i<20;i++)vm.runInContext('scheduleSessionSave()',ctx);
+  assert.equal(sent.length,0);
+  assert.equal(timers.size,1);
+  vm.runInContext(`sendRequest('dialog',{revision:'Заменить компонент'})`,ctx);
+  assert.equal(timers.size,0);
+  assert.deepEqual(sent.map(message=>message.type),['dialog']);
+  assert.equal(sent[0].ui.revision,'Заменить компонент');
+});
+test('revision builds the model request before writing the attached history snapshot',async()=>{
+  const app=historyFixture();await seedB2B(app);
+  const events=[];
+  const write=app.ctx.pixso.root.setPluginData;
+  app.ctx.pixso.root.setPluginData=(key,value)=>{events.push('save');write(key,value);};
+  app.ctx.pixso.ui.postMessage=message=>events.push(message.type);
+  await app.run(`handleMessage({type:'dialog',revision:'Замени MaskedField на TextField',ui:{task:'B2B',revision:'Замени MaskedField на TextField',transcript:[{chat:'componentChat',author:'Вы',text:'Мои правки'}]}})`);
+  assert.ok(events.indexOf('dialogRequest')>=0);
+  assert.ok(events.indexOf('dialogRequest')<events.indexOf('save'));
+  assert.equal(app.run('sessionUI.transcript[0].text'),'Мои правки');
+});
