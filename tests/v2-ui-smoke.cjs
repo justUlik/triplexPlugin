@@ -54,8 +54,9 @@ await page.check('#stateModeAnalytics');assert.equal(await page.locator('#analyt
 await page.screenshot({path:'/tmp/v2-states-analytics.png',fullPage:true});
 await page.fill('#analytics','При пустом количестве показать ошибку: Укажите количество');await page.click('#flowSend');
 assert.equal(await page.evaluate(()=>sent.at(-1).type),'requestStates');assert.equal(await page.evaluate(()=>sent.at(-1).mode),'analytics');
-await receive({type:'flowProposal',mode:'analytics',reply:'Предлагаю активное поле и ошибку.',fields:[{field:'1',component:'NumberField',label:'Количество ЦФА'}],labels:{'1':'Количество ЦФА'},states:[{name:'Активное печатание',condition:'Пользователь вводит количество',values:{'1':'10'},properties:[{field:'1',values:{Active:true}}],errors:[]},{name:'Пустое количество',condition:'Отправка без количества',values:{'1':''},errors:[{field:'1',text:'Укажите количество'}]}]});
+await receive({type:'flowProposal',skipped:1,mode:'analytics',reply:'Предлагаю активное поле и ошибку.',fields:[{field:'1',component:'NumberField',label:'Количество ЦФА'}],labels:{'1':'Количество ЦФА'},states:[{name:'Активное печатание',condition:'Пользователь вводит количество',values:{'1':'10'},properties:[{field:'1',values:{Active:true}}],errors:[]},{name:'Пустое количество',condition:'Отправка без количества',values:{'1':''},errors:[{field:'1',text:'Укажите количество'}]}]});
 assert.equal(await page.locator('.state-card').count(),2);
+assert.match(await page.locator('#flowChat').textContent(),/Не удалось прочитать вариантов: 1/);
 assert.equal(await page.locator('.component-state-group').count(),1);
 assert.equal(await page.locator('.component-state-group>h3').textContent(),'Количество ЦФА');
 assert.equal(await page.locator('#approveFlow').isEnabled(),true);

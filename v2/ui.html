@@ -993,6 +993,7 @@ window.addEventListener('message', async event => {
       $('feedback').value = '';
       hasFlowDraft = message.states.length > 0;
       addMessage('flowChat', 'GigaCode', message.reply);
+      if(message.skipped)addMessage('flowChat','Плагин','Не удалось прочитать вариантов: '+message.skipped+'. Остальные доступны для подтверждения.');
       for(const limitation of message.limitations||[])addMessage('flowChat','Плагин','Пока не удалось собрать '+limitation.interaction+' для поля «'+limitation.label+'».');
       renderFlowChoices(message.states, message.labels);
       status('');

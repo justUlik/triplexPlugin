@@ -559,4 +559,38 @@ module._compile(source + `
    assert.equal(app.messages.at(-1).skipped,1);assert.equal(app.messages.at(-1).groups,0);
    assert.match(app.messages.at(-1).skippedStates[0].reason,/Не удалось применить значение/);
  });
+
+ test('state normalization accepts explicit text values and property records without losing copy',()=>{
+   const app=statePreviewFixture();app.run('const nodes=new Map([["1",pixso.getNodeById("source").children[0]]])');
+   const cases=[
+     {values:{text:'Мой текст'},properties:[null,{field:'1',property:'ShowError#1',value:true}]},
+     {values:{field:'1',text:'Мой текст'},properties:{field:'1',values:{'ShowError#1':true}}},
+     {values:[{field:1,value:'Мой текст'}],properties:{'ShowError#1':true}},
+     {values:{'1':{text:'Мой текст'}},properties:[{field:'1',values:{'ShowError#1':true}},{field:'1',values:{'Label#1':'Моя подпись'}}]}
+   ];
+   for(const input of cases){app.ctx.input=input;
+     const state=app.run('normalizeStatePlan({states:[{name:"Ошибка",condition:"Проверка",...input}]},nodes).states[0]');
+     assert.equal(state.values['1'],'Мой текст');assert.equal(state.properties[0].values['ShowError#1'],true);
+   }
+ });
+ test('text shorthand requires an unambiguous component and never invents identifiers',()=>{
+   const app=statePreviewFixture();app.run('const nodes=new Map([["1",{}],["2",{}]])');
+   assert.throws(()=>app.run('normalizeStatePlan({states:[{name:"Ввод",condition:"Ввод",values:{text:"10"}}]},nodes)'),/однозначно/);
+   assert.equal(app.run('normalizeStatePlan({states:[{name:"Ввод",condition:"Ввод",values:{text:"10"},properties:[{field:"2",values:{Active:true}}]}]},nodes).states[0].values["2"]'),'10');
+   assert.throws(()=>app.run('normalizeStatePlan({states:[{name:"Ввод",condition:"Ввод",field:"999",values:{text:"10"}}]},nodes)'),/неизвестный field/);
+   assert.throws(()=>app.run('normalizeStatePlan({states:[{name:"Ввод",condition:"Ввод",field:"1",values:{text:"10",value:"20"}}]},nodes)'),/одно значение/);
+ });
+ test('component plans retain readable states when another state has malformed properties',async()=>{
+   const app=statePreviewFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   app.run('reviewFlow({raw:JSON.stringify({states:[{name:"Некорректное",condition:"Ввод",properties:[true]},{name:"Пусто",condition:"Отправка",values:{text:""},errors:[{field:"1",text:"Введите количество"}]}]})})');
+   assert.equal(app.messages.at(-1).type,'flowProposal');assert.equal(app.messages.at(-1).skipped,1);
+   assert.equal(app.run('flow.states.length'),1);assert.equal(app.run('flow.states[0].errors[0].text'),'Введите количество');
+ });
+ test('contradictory property patches reject and all-invalid component plans still request repair',async()=>{
+   const app=statePreviewFixture();await app.run('requestStates({mode:"auto",standard:""})');
+   app.run('const nodes=new Map([["1",{}]])');
+   assert.throws(()=>app.run('normalizeStatePlan({states:[{name:"Ошибка",condition:"Отправка",properties:[{field:"1",values:{Error:true}},{field:"1",values:{Error:false}}]}]},nodes)'),/противоречивые/);
+   await app.run('handleCommand({type:"reviewFlow",raw:JSON.stringify({states:[{name:"Ввод",condition:"Ввод",properties:[true]}]})})');
+   assert.equal(app.messages.at(-1).type,'flowRequest');assert.equal(app.messages.at(-1).repairing,true);
+ });
 `, __filename);

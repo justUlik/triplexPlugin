@@ -2328,6 +2328,7 @@ function requestFlow({ requirements, feedback, standard, selection, edits, mode 
     'Следуй текстовому стандарту. Значения вымышленные. Каждую независимую ошибку предложи отдельным состоянием, сочетания — только если нужны по кейсу.',
     'Верни только JSON: {"reply":"Короткое пояснение","states":[{"name":"Название состояния","condition":"Когда показать","values":{},"variants":[],"properties":[],"errors":[]}]}. Заполни нужные изменения реальными field и controls из fields. Не подставляй служебные слова из примера вместо библиотечных идентификаторов или состояний.',
     'Для взаимодействий предпочтительно копируй готовый control из fields.stateCapabilities.controls. Можно передать variants:[{field,axes:{State:"Active",Filled:true}}]; плагин сохранит неизменяемые оси. Для ошибки Error и Warning могут быть отдельными осями True/False, а не значениями State. Не передавай variant:"" или пустые записи variants.',
+    'Формат values — объект с идентификатором поля в ключе, например {"1":"100"}, НЕ {"text":"100"}. Формат properties — список объектов [{"field":"1","values":{"точный ключ BOOLEAN":true}}], НЕ список строк или значений. Пустые изменения: values:{}, properties:[]. Пример использует условный ID 1: замени его реальным fields.field. В каждом состоянии укажи field соответствующего компонента.',
     'Для каждого состояния обязательно укажи name и condition. Если нет значений/ошибок, передай values:{} и errors:[], без null. field копируй из fields.field, не из номера каталога или позиции строки.',
     'Дай до 96 релевантных отдельных состояний компонентов (обычно до 12 на компонент). properties содержит только точные доступные ключи BOOLEAN/TEXT и значения подходящего типа. Не меняй size/theme. values, variants, properties и errors могут быть пустыми. Используй только field из fields; для variants скопируй key из variantOptions (предпочтительно) или точное полное имя. Не передавай название оси «State»/«Состояние» вместо значения. Для ошибки выбери совместимый вариант ошибки, если он доступен. Сохраняй предыдущие предложения и решения пользователя; по уточнению добавляй недостающие.',
     'fields.currentCopy — актуальные тексты с холста, включая ручные правки. Сохраняй подписи, placeholders и описания. Меняй только явно заданные в состоянии значения и Description соответствующей ошибки. Старые подписи из истории не должны возвращаться.',
@@ -2402,7 +2403,7 @@ function requestFlowRepair(message,error) {
   if(message?.type!=='reviewFlow'||!pendingFlow||pendingFlow.repairAttempted)return false;
   const source=lockedSource();pendingFlow.repairAttempted=true;
   send('flowRequest',{repairing:true,prompt:[
-    'Исправь ответ о состояниях формы. Верни только JSON {"reply":"Краткое пояснение","states":[{"name":"Название","condition":"Когда показать","values":{},"variants":[],"properties":[],"errors":[]}]}. Все field копируй из fields.field как строки; для общей ошибки формы используй field:"". Не подставляй ID типа из каталога.',
+    'Исправь ответ о состояниях формы. Верни только JSON {"reply":"Краткое пояснение","states":[{"name":"Название","condition":"Когда показать","values":{},"variants":[],"properties":[],"errors":[]}]}. Все field копируй из fields.field как строки; для ошибки укажи компонент. values имеет вид {"реальный field":"текст значения"}, не {"text":"значение"}. properties — [{"field":"реальный field","values":{"точный ключ свойства":true}}], не список примитивов. Не подставляй ID типа из каталога.',
     'Ошибка проверки: '+(error.message||String(error)),
     'Используй только реальные field, совместимые variants и свойства BOOLEAN/TEXT из fields. Для варианта предпочитай {field,key} из variantOptions; не выдумывай key и не используй название оси «Состояние» как имя варианта. Не меняй размер/тему. Description содержит текст ошибки; отдельно нужен доступный error-variant/BOOLEAN. Раскрытие и активность допустимы только при доступном свойстве/варианте. Если реализация недоступна, объясни это в reply, не имитируй её пустой копией.',
     JSON.stringify({...pendingFlow,confirmedTask:approvedSource.task,fields:confirmedFlowFields(source),invalidResponse:typeof message.raw==='string'?message.raw.slice(0,12000):''})
@@ -2419,7 +2420,7 @@ function statePlanObject(value,path) {
   if(!value||typeof value!=='object'||Array.isArray(value))throw statePlanError(path,'ожидается объект');
   return value;
 }
-function normalizeStatePlan(plan,nodes,limit=24) {
+function normalizeStatePlan(plan,nodes,limit=24,allowPartial=false) {
   statePlanObject(plan,'ответ');
   if(!Array.isArray(plan.states))throw statePlanError('states','ожидается список состояний');
   if(plan.states.length>limit)throw statePlanError('states','получено '+plan.states.length+' состояний при лимите '+limit);
@@ -2437,16 +2438,51 @@ function normalizeStatePlan(plan,nodes,limit=24) {
     if(Array.isArray(value))return value;
     return Object.entries(statePlanObject(value,path)).map(map);
   };
-  const states=plan.states.map((input,index)=>{
+  const skippedStates=[];
+  const states=plan.states.flatMap((input,index)=>{
+    try {
     const path='states['+(index+1)+']';statePlanObject(input,path);
     const state={...input,name:string(input.name??input.title,path+'.name'),condition:string(input.condition??input.when,path+'.condition',true)};
-    const values=input.values==null?{}:input.values;
-    statePlanObject(values,path+'.values');state.values={};
-    for(const [id,value] of Object.entries(values)) {
-      const key=fieldId(id,path+'.values['+id+']');
-      if(Object.prototype.hasOwnProperty.call(state.values,key))throw statePlanError(path+'.values','повторный field '+key);
-      if(typeof value!=='string'&&!(typeof value==='number'&&Number.isFinite(value)))throw statePlanError(path+'.values['+id+']','значение должно быть текстом или числом');
-      state.values[key]=string(String(value),path+'.values['+id+']',true);
+    // Resolve shorthand only when the target is explicit or unambiguous.
+    const references=new Set();
+    const reference=value=>{const id=typeof value==='number'?String(value):value;if(nodes.has(id))references.add(id);};
+    reference(input.field);
+    for(const collection of [input.variants,input.properties,input.errors]) {
+      if(Array.isArray(collection))for(const entry of collection)reference(entry?.field);
+      else if(collection&&typeof collection==='object'){reference(collection.field);for(const id of Object.keys(collection))reference(id);}
+    }
+    if(input.values&&typeof input.values==='object'){reference(input.values.field);for(const id of Object.keys(input.values))reference(id);}
+    const target=path=>input.field!==undefined?fieldId(input.field,path):references.size===1?[...references][0]:nodes.size===1?[...nodes.keys()][0]:(()=>{throw statePlanError(path,'укажите field: компонент нельзя определить однозначно');})();
+    const valueOf=(value,path)=>{
+      if(value&&typeof value==='object'&&!Array.isArray(value)) {
+        const entries=Object.entries(value).filter(([key])=>key!=='field');
+        if(entries.length!==1||!['text','value'].includes(entries[0][0]))throw statePlanError(path,'нужно одно значение text или value');
+        value=entries[0][1];
+      }
+      if(typeof value!=='string'&&!(typeof value==='number'&&Number.isFinite(value)))throw statePlanError(path,'значение должно быть текстом или числом');
+      return string(String(value),path,true);
+    };
+    const values=input.values==null?{}:input.values;state.values={};
+    const addValue=(id,value,path)=>{
+      const key=fieldId(id,path);
+      if(Object.prototype.hasOwnProperty.call(state.values,key))throw statePlanError(path,'повторный field '+key);
+      state.values[key]=valueOf(value,path);
+    };
+    if(Array.isArray(values)) {
+      for(const [j,entry] of values.entries()) {
+        const itemPath=path+'.values['+(j+1)+']';statePlanObject(entry,itemPath);
+        const keys=Object.keys(entry).filter(key=>key!=='field');
+        if(keys.length!==1||!['text','value'].includes(keys[0]))throw statePlanError(itemPath,'нужны field и одно значение text или value');
+        addValue(entry.field??target(itemPath),entry[keys[0]],itemPath);
+      }
+    } else {
+      statePlanObject(values,path+'.values');
+      const keys=Object.keys(values),shorthand=keys.length>0&&keys.every(key=>['field','text','value'].includes(key))&&!keys.some(key=>nodes.has(key));
+      if(shorthand) {
+        const payload=keys.filter(key=>key!=='field');
+        if(payload.length!==1)throw statePlanError(path+'.values','нужно одно значение text или value');
+        addValue(values.field??target(path+'.values'),values[payload[0]],path+'.values');
+      } else for(const [id,value] of Object.entries(values))addValue(id,value,path+'.values['+id+']');
     }
     const emptyVariants=[];
     state.variants=list(input.variants,path+'.variants',([field,variant])=>variant&&typeof variant==='object'?{field,...variant}:{field,variant}).map((choice,j)=>{
@@ -2460,26 +2496,50 @@ function normalizeStatePlan(plan,nodes,limit=24) {
       if(!key&&!variant&&!Object.keys(axes||{}).length){emptyVariants.push({field,path:itemPath});return null;}
       return {...choice,field,key,variant,axes};
     }).filter(Boolean);
-    state.properties=list(input.properties,path+'.properties',([field,values])=>({field,values})).map((patch,j)=>{
-      const itemPath=path+'.properties['+(j+1)+']';statePlanObject(patch,itemPath);statePlanObject(patch.values,itemPath+'.values');
-      return {...patch,field:fieldId(patch.field,itemPath+'.field'),values:{...patch.values}};
-    });
+    let propertyInput=input.properties;
+    if(propertyInput&&typeof propertyInput==='object'&&!Array.isArray(propertyInput)) {
+      if(Object.prototype.hasOwnProperty.call(propertyInput,'field'))propertyInput=[propertyInput];
+      else if(Object.keys(propertyInput).length&&!Object.keys(propertyInput).some(id=>nodes.has(id)))propertyInput=[{field:target(path+'.properties'),values:propertyInput}];
+    }
+    const patches=list(propertyInput,path+'.properties',([field,values])=>({field,values}));
+    const byField=new Map();
+    for(const [j,patch] of patches.entries()) {
+      const itemPath=path+'.properties['+(j+1)+']';
+      if(patch==null)continue; // Empty optional entries carry no changes.
+      statePlanObject(patch,itemPath);
+      const field=fieldId(patch.field??target(itemPath+'.field'),itemPath+'.field');
+      let values=patch.values;
+      if(values===undefined&&typeof (patch.property??patch.name)==='string'&&Object.prototype.hasOwnProperty.call(patch,'value'))values={[patch.property??patch.name]:patch.value};
+      statePlanObject(values,itemPath+'.values');
+      const merged=byField.get(field)||{field,values:{}};
+      for(const [key,value] of Object.entries(values)) {
+        if(Object.prototype.hasOwnProperty.call(merged.values,key)&&merged.values[key]!==value)throw statePlanError(itemPath,'противоречивые значения свойства '+key);
+        merged.values[key]=value;
+      }
+      byField.set(field,merged);
+    }
+    state.properties=[...byField.values()];
     state.errors=list(input.errors,path+'.errors',([field,text])=>({field,text})).map((error,j)=>{
       const itemPath=path+'.errors['+(j+1)+']';statePlanObject(error,itemPath);
       if(error.text!==undefined&&error.message!==undefined&&error.text!==error.message)throw statePlanError(itemPath,'text и message противоречат друг другу');
       return {...error,field:fieldId(error.field,itemPath+'.field',true),text:string(error.text??error.message,itemPath+'.text')};
     });
     for(const empty of emptyVariants)if(!state.errors.some(error=>error.field===empty.field))throw statePlanError(empty.path,'не указано нужное состояние; используйте key или axes из fields');
-    return state;
+    return [state];
+    } catch(error) {
+      if(!allowPartial||error.code!=='MODEL_STATE_PLAN')throw error;
+      skippedStates.push({index:index+1,reason:error.message});return [];
+    }
   });
-  return {...plan,reply:plan.reply==null?'Предлагаю состояния для компонентов на макете.':string(plan.reply,'reply',true),states};
+  if(!states.length&&skippedStates.length)throw statePlanError('states','не удалось прочитать ни одного состояния. '+skippedStates[0].reason);
+  return {...plan,skippedStates,reply:plan.reply==null?'Предлагаю состояния для компонентов на макете.':string(plan.reply,'reply',true),states};
 }
 
 function reviewFlow({ raw }) {
   const source = lockedSource();
   if (!pendingFlow || typeof raw !== 'string' || raw.length > (pendingFlow.renderMode==='components'?80000:40000)) throw new Error('Некорректный ответ GigaCode.');
   const nodes = new Map(sourceFields(source).map(node=>[node.getPluginData('triplex-field-id'),node]));
-  const plan = normalizeStatePlan(parseModelResponse(raw,pendingFlow.renderMode==='components'?80000:40000),nodes,pendingFlow.renderMode==='components'?96:24);
+  const plan = normalizeStatePlan(parseModelResponse(raw,pendingFlow.renderMode==='components'?80000:40000),nodes,pendingFlow.renderMode==='components'?96:24,pendingFlow.renderMode==='components');
   restoreFlowDraftOverrides(plan,pendingFlow.draftOverrides);
   plan.states=plan.states.filter(state=>Object.keys(state.values).length||state.errors.length||state.variants.length||state.properties.length);
   for(const state of plan.states)validateStateBindings(state,nodes);
@@ -2489,9 +2549,9 @@ function reviewFlow({ raw }) {
   plan.states=uniqueChangedStates(plan.states,nodes);
   const modelReply=plan.reply;
   plan.reply=plan.states.length?'Подготовил вариантов: '+plan.states.length+'. Проверьте изменения ниже.':'Пока не удалось собрать новые варианты. Уточните нужные состояния в аналитике.';
-  flow = { ...pendingFlow, states: plan.states, reply: plan.reply,modelReply,limitations:plan.limitations };
+  flow = { ...pendingFlow, skippedStates:plan.skippedStates, states: plan.states, reply: plan.reply,modelReply,limitations:plan.limitations };
   pendingFlow = null;
-  send('flowProposal', { reply: plan.reply, states: plan.states,renderMode:flow.renderMode,limitations:flow.limitations, mode:flow.mode, analytics:flow.analytics, fields:confirmedFlowFields(source), labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
+  send('flowProposal', { reply: plan.reply, states: plan.states,renderMode:flow.renderMode,skipped:flow.skippedStates?.length||0,limitations:flow.limitations, mode:flow.mode, analytics:flow.analytics, fields:confirmedFlowFields(source), labels: Object.fromEntries(confirmedFlowFields(source).map(field=>[field.field,field.label])) });
 }
 
 function splitComponentStates(states,nodes) {
